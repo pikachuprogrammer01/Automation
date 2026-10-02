@@ -160,7 +160,7 @@ manager/install-launchagent             # 生成并加载 ~/Library/LaunchAgents
 | `private/` | 使用者自己按站点写的 runner、入口脚本、交接文档。含目标站点域名、签到判定标记、本机绝对路径 | 否 |
 | `var/` | 运行期个人数据：`registry.json`（站点 URL、账号别名、launchd 标签）、`tasks/*/auth.json`（录制出来的登录态）、`browser-data/`（Cookies 与 Local Storage）、`logs/`（运行日志与失败取证截图）、`backups/` | 否 |
 
-另加 `.env`、`.env.*` 作守卫——本项目不读环境变量文件，但它们一旦出现在工作区就不该入库。还有一条 `skyvern/`：那套 787M + AGPL 的上游 clone 已删除，规则留着是防止有人再把它 clone 进来。
+另加 `.env`、`.env.*` 作守卫——本项目不读环境变量文件，但它们一旦出现在工作区就不该入库。
 
 **为什么排除规则必须在 `.gitignore` 而不是 `.git/info/exclude`**：后者不随仓库走，重新克隆后就没了；此后再来一次 `git add -A`，站点名和账号就被写进 git 历史 —— 而历史是 `.gitignore` 事后清不掉的东西。所以本仓的边界靠 `private/` 与 `var/` 这两个**目录名**成立，不靠任何只存在于单台机器上的配置。
 
