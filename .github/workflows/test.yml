@@ -29,7 +29,19 @@ jobs:
       # 故意不跑 npm install：测试必须零依赖可执行。
       # 这一步同时也是 PRD 产品原则 5「默认值要能直接活」的回归验证。
       - name: 测试 + 覆盖率门禁（行 ≥90 / 分支 ≥85）
-        run: npm run test:ci
+        run: |
+          set +e
+          npm run test:ci > /tmp/t.log 2>&1
+          code=$?
+          set -e
+          tail -8 /tmp/t.log
+          if [ "$code" -ne 0 ]; then
+            # 日志正文要登录才看得到，失败清单必须变成匿名可读的 annotation
+            grep -E '^ℹ (tests|pass|fail)' /tmp/t.log | sed 's/^/::error::/'
+            awk '/^✖ failing tests:/,0' /tmp/t.log | grep -oE '✖ [^\(]+' | grep -v 'failing tests' | head -12 | sed 's/^/::error::失败用例: /'
+            grep -E 'AssertionError|TypeError|Error: ' /tmp/t.log | head -6 | sed 's/^/::error::/'
+            exit "$code"
+          fi
 
       - name: 发布仓洁净度 —— 追踪清单里不得出现私有层路径
         run: |
@@ -57,7 +69,19 @@ jobs:
           cache: npm
           cache-dependency-path: manager/package-lock.json
       - run: npm ci --prefix manager
-      - run: node --test test/*.test.mjs
+      - name: 故障注入用例（需要真 Chrome）
+        run: |
+          set +e
+          node --test test/*.test.mjs > /tmp/t.log 2>&1
+          code=$?
+          set -e
+          tail -8 /tmp/t.log
+          if [ "$code" -ne 0 ]; then
+            grep -E '^ℹ (tests|pass|fail)' /tmp/t.log | sed 's/^/::error::/'
+            awk '/^✖ failing tests:/,0' /tmp/t.log | grep -oE '✖ [^\(]+' | grep -v 'failing tests' | head -12 | sed 's/^/::error::失败用例: /'
+            grep -E 'AssertionError|TypeError|Error: ' /tmp/t.log | head -6 | sed 's/^/::error::/'
+            exit "$code"
+          fi
 
   # 抓「改了前端源码却忘了重新构建」——manager/public/ 是入库产物，失同步是静默的
   artifact:
