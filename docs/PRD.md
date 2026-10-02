@@ -137,6 +137,6 @@
 ## 风险与开放问题
 
 1. **目标站点的服务条款是否允许脚本化访问，未做评估。** 这是使用者自己的判断，作者不做背书 —— 也是发布版不带站点专用 runner 的原因。
-2. **`manager/server.mjs` 的纯函数尚未与副作用分离**（`fromPortable`/`plistText`/入参校验），所以它本身拿不到单元覆盖；目前靠 API 契约层与生命周期层从外部压住行为。
+2. **`manager/server.mjs` 的副作用部分仍无单元覆盖**：`fromPortable`/`toPortable`/`plistText`/`validId`/`resolveStatic`/`isSameOrigin`/`logWindow` 已抽到 `manager/task-format.mjs`（100% 行/分支），但 `installTask`、`spawn`、Chrome 托管这些只能靠 API 契约层与生命周期层从外部压行为。
 3. **`open-manager` 的两条失败分支未做运行时验证**（会重启生产服务或注册真实 launchd 任务），只有静态保证。
 4. **录制脚本的可维护性归使用者。** 站点改版导致失效，产品不提供任何自愈能力。

@@ -5,6 +5,10 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { baseDir, lastRunFor } from '../lib/run-result.mjs';
+import {
+  fromPortable as fmtFromPortable, toPortable as fmtToPortable, mapTaskPaths as fmtMapTaskPaths,
+  validId, plistText, resolveStatic, isSameOrigin, logWindow,
+} from './task-format.mjs';
 
 const HOME = os.homedir();
 const UID = process.getuid();
@@ -32,31 +36,13 @@ const results = new Map();
 fs.mkdirSync(TASKS, { recursive: true, mode: 0o700 });
 fs.mkdirSync(path.join(BASE, 'logs'), { recursive: true });
 
-// registry 里存可移植路径：`~/...` 或相对仓库根；这样换机器、改目录名、克隆仓库都不用重写数据。
-function fromPortable(v) {
-  if (typeof v !== 'string' || !v || v.includes('://')) return v;
-  if (v.startsWith('~/')) return path.join(HOME, v.slice(2));
-  if (v.startsWith('/') || v.startsWith('\\"')) return v;
-  return path.join(BASE, v);
-}
-function toPortable(v) {
-  if (typeof v !== 'string' || !v) return v;
-  if (v === HOME) return '~';
-  if (v.startsWith(HOME + '/')) return '~/' + v.slice(HOME.length + 1);
-  if (v.startsWith(BASE + '/')) return v.slice(BASE.length + 1);
-  return v;
-}
-const PORTABLE_KEYS = ['plistPath', 'logPath', 'configPath', 'profileDir', 'taskDir', 'stdoutPath', 'stderrPath'];
+// registry 里存可移植路径：`~/...` 或相对数据根；换机器、改目录名、克隆仓库都不用重写数据。
+// 实现见 manager/task-format.mjs —— 那层不碰磁盘也不碰 launchd，所以能单独测。
+const CTX = { base: BASE, home: HOME };
+const fromPortable = (v) => fmtFromPortable(v, CTX);
+const toPortable = (v) => fmtToPortable(v, CTX);
 function mapTaskPaths(task, fn) {
-  const out = { ...task };
-  for (const k of PORTABLE_KEYS) if (k in out) out[k] = fn(out[k]);
-  // 约定：command[0] 是解释器、command[1] 是脚本（可移植路径）、command[2+] 是参数（永不改写）。
-  if (Array.isArray(out.command) && out.command.length > 1) {
-    const cmd = [...out.command];
-    cmd[1] = fn(cmd[1]);
-    out.command = cmd;
-  }
-  return out;
+  return fmtMapTaskPaths(task, fn);
 }
 function loadRegistry() {
   let raw;
@@ -114,9 +100,6 @@ async function collectBody(req) {
   const text = Buffer.concat(chunks).toString('utf8');
   if (text.length > 64 * 1024) throw new ApiError('request_too_large', `请求体过大（${text.length} 字节，上限 64KB）`, '本接口不接收大内容；网址和任务名都该是短字符串', 413);
   return JSON.parse(text);
-}
-function validId(id) {
-  return typeof id === 'string' && /^[a-z0-9][a-z0-9-]{1,40}$/.test(id);
 }
 function runSync(file, args = [], options = {}) {
   return spawnSync(file, args, { encoding: 'utf8', timeout: 30000, ...options });
@@ -209,25 +192,6 @@ function taskView(task) {
     active: active.get(task.id) || null,
     lastRun: results.get(task.id) || diskLastRun(task) || null,
   };
-}
-function xml(s) {
-  return String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-}
-function plistText(task, hour, minute) {
-  const args = task.command.map((x) => `<string>${xml(x)}</string>`).join('');
-  const out = task.stdoutPath || `${task.logPath}.launchd.out`;
-  const err = task.stderrPath || `${task.logPath}.launchd.err`;
-  return `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n` +
-    `<plist version="1.0"><dict>\n` +
-    `<key>Label</key><string>${xml(task.launchLabel)}</string>\n` +
-    `<key>ProgramArguments</key><array>${args}</array>\n` +
-    `<key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>\n` +
-    `<key>StartCalendarInterval</key><dict><key>Hour</key><integer>${hour}</integer><key>Minute</key><integer>${minute}</integer></dict>\n` +
-    `<key>ProcessType</key><string>Background</string>\n` +
-    `<key>StandardOutPath</key><string>${xml(out)}</string>\n` +
-    `<key>StandardErrorPath</key><string>${xml(err)}</string>\n` +
-    `</dict></plist>\n`;
 }
 function bootout(task) {
   runSync(LAUNCHCTL, ['bootout', `gui/${UID}/${task.launchLabel}`]);
@@ -444,8 +408,7 @@ function readLog(task, from) {
   const file = task.logPath;
   if (!file || !fs.existsSync(file)) return { text: '', size: 0, from: 0, missing: true };
   const size = fs.statSync(file).size;
-  const start = Number.isFinite(from) && from >= 0 ? Math.min(from, size) : Math.max(0, size - 65536);
-  const len = Math.min(size - start, 65536);
+  const { start, len } = logWindow(from, size);
   let text = '';
   if (len > 0) {
     const fd = fs.openSync(file, 'r');
@@ -456,15 +419,10 @@ function readLog(task, from) {
   }
   return { text, size, from: start };
 }
-function sameOrigin(req) {
-  const origin = req.headers.origin;
-  if (!origin) return true;
-  return origin === `http://127.0.0.1:${PORT}` || origin === `http://localhost:${PORT}`;
-}
+const sameOrigin = (req) => isSameOrigin(req.headers.origin, PORT);
 function serveStatic(req, res, pathname) {
-  const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
-  const file = path.resolve(PUBLIC, rel);
-  if (!file.startsWith(path.resolve(PUBLIC) + path.sep) && file !== path.join(PUBLIC, 'index.html')) {
+  const { file, forbidden } = resolveStatic(pathname, PUBLIC);
+  if (forbidden) {
     return failJson(res, 403, '禁止访问该路径', { code: 'forbidden', hint: '静态文件只能取 manager/public 目录下的内容' });
   }
   let target = file;

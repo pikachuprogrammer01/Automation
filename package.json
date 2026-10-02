@@ -12,8 +12,8 @@
     "build": "npm --prefix manager/web run build",
     "dev": "npm --prefix manager/web run dev",
     "test": "node --test test/*.test.mjs",
-    "test:coverage": "node --test --experimental-test-coverage --test-coverage-include=lib/** --test-coverage-include=manager/** test/*.test.mjs",
-    "test:ci": "node --test --experimental-test-coverage --test-coverage-include=lib/** --test-coverage-lines=90 --test-coverage-branches=85 test/*.test.mjs",
+    "test:coverage": "node --test --experimental-test-coverage --test-reporter=spec --test-coverage-include=lib/*.mjs --test-coverage-include=manager/*.mjs test/*.test.mjs",
+    "test:ci": "node --test --experimental-test-coverage --test-coverage-include=lib/*.mjs --test-coverage-include=manager/task-format.mjs --test-coverage-lines=90 --test-coverage-branches=85 test/*.test.mjs",
     "test:watch": "node --test --watch test/*.test.mjs"
   }
 }

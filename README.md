@@ -122,6 +122,7 @@ manager/automation-log.mjs --stale               # 已启用但超时没有成�
 | `manager/automation-log.mjs` | 查运行记录、失败原因、证据文件、漏跑任务 |
 | `manager/run-record.mjs` | 每次运行时落一条记录（由 wrapper 调用，不用手动跑） |
 | `manager/run-recorded-task` | 录制任务的执行器：解析 node、建 `var/tasks/node_modules` 软链、加锁、写日志 |
+| `manager/task-format.mjs` | 纯格式化与校验层：可移植路径、plist 生成与 XML 转义、任务 ID、静态越界、同源、日志字节窗口 |
 | `lib/run-result.mjs` | 数据根（`baseDir()`）、运行记录、状态与原因词表的**单一来源** |
 | `lib/keychain-credential.mjs` | 从 macOS Keychain 取凭据 |
 | `lib/automation-run.zsh` | 入口脚本共用的一次运行上下文（runId、触发来源、记录写入） |
@@ -177,7 +178,7 @@ npm run test:ci       # 同上 + 覆盖率门禁（行 ≥90 / 分支 ≥85）�
 
 | 层 | 位置 | 覆盖什么 | 需要装依赖 |
 | --- | --- | --- | --- |
-| 纯逻辑 | `test/lib.run-result.test.mjs` | 状态与原因词表、时间键、数据根、记录读写与清理、提醒去重 | 否 |
+| 纯逻辑 | `test/lib.run-result.test.mjs` `test/manager.task-format.test.mjs` | 状态与原因词表、时间键、数据根、记录读写与清理、提醒去重；可移植路径、plist 生成与 XML 转义、任务 ID、静态越界、同源、日志字节窗口 | 否 |
 | API 契约 | `test/api.contract.test.mjs` | 入参校验矩阵、错误码、409 并发、403 跨站、413/422/503 | 否 |
 | 生命周期 | `test/e2e.lifecycle.test.mjs` | 建→定时→运行→暂停→启用→移除→删除全链路；`launchctl` 调用序列 | 否 |
 | 故障注入 | `test/fault.*.test.mjs` | 被强杀后的锁接管、连接被拒、500、挂站超时、DNS 失败、只读目录 | 网络层需要 |
