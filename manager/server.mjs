@@ -147,7 +147,7 @@ function tailLine(file, accountKey) {
     fs.closeSync(fd);
     lines = buf.toString('utf8').trim().split(/\r?\n/).filter(Boolean);
   } catch { return ''; }
-  // 同站点多账号 share one log file; without this the B card shows the A account's line.
+  // Tasks with the same log file share it; without this the B card shows the A account's line.
   if (accountKey && /^[a-z0-9]$/.test(accountKey)) {
     const mine = lines.filter((l) => l.includes(`[${accountKey}]`) || new RegExp(`"account"\\s*:\\s*"${accountKey}"`).test(l));
     if (mine.length) return mine.at(-1);

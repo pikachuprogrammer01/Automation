@@ -1,6 +1,10 @@
 # 依赖与构建缓存
 node_modules/
 
+# 环境变量文件：一旦引入 dotenv 就会被 git add -A 带走
+.env
+.env.*
+
 # 个人运行数据：含真实账号、邮箱、浏览器登录态，任何情况下都不入库
 manager/registry.json
 manager/registry.json.bak
@@ -11,6 +15,10 @@ tasks/node_modules
 browser-data/
 logs/
 recordings/
+
+# 作者按具体站点写的 runner、入口脚本与交接文档属于私有层，不入库。
+# 这些路径名本身会暴露目标站点，所以守卫写在本地 .git/info/exclude 里，不放这份公开文件。
+# 重新克隆本仓后要先补回那份 exclude，否则 git add -A 会把私有层带进来。
 
 # 第三方整块（自带 .git，体积 787M）
 skyvern/

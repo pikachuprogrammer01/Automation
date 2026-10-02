@@ -88,12 +88,12 @@ AUTOMATION_MANAGER_PORT=4799 node manager/server.mjs
 ```bash
 manager/automation-log.mjs                       # 最近 20 次
 manager/automation-log.mjs --failed --days 7     # 这周哪些失败了、为什么
-manager/automation-log.mjs --task demo-a   # 单个任务历史（判断是不是偶发）
+manager/automation-log.mjs --task demo-a         # 单个任务历史（判断是不是偶发）
 manager/automation-log.mjs --run <runId> --open  # 摊开一次运行并打开它的截图
 manager/automation-log.mjs --stale               # 已启用但超时没有成功记录的任务
 ```
 
-定时运行（launchd 触发）失败会弹 macOS 通知，同一任务同一原因当天只提醒一次；界面点和终端手跑不弹，因为当场就能看到。完整设计见 `docs/OBSERVABILITY.md`，需求与验收见 `docs/OBSERVABILITY-PRD.md`。
+定时运行（launchd 触发）失败会弹 macOS 通知，同一任务同一原因当天只提醒一次；界面点和终端手跑不弹，因为当场就能看到。记录字段与提醒规则的实现说明在 `manager/README.md` 和 `manager/automation-log.mjs --help`。
 
 ## 代码在哪
 
@@ -107,12 +107,10 @@ manager/automation-log.mjs --stale               # 已启用但超时没有成�
 | `manager/install-launchagent` | 生成并加载管理器的 LaunchAgent；`--dry-run` 先看，`--uninstall` 卸载 |
 | `manager/automation-log.mjs` | 查运行记录、失败原因、证据文件、漏跑任务 |
 | `manager/run-record.mjs` | 每次运行时落一条记录（由 wrapper 调用，不用手动跑） |
-| `docs/OBSERVABILITY.md` | 错误排查体系设计：runId、记录格式、提醒规则、保留清理 |
 | `manager/run-recorded-task` | 录制任务的执行器：解析 node、建 `tasks/node_modules` 软链、加锁、写日志 |
 | `tasks/<任务 ID>/` | 每个录制任务的 `recorded.spec.js` / `playwright.config.mjs` / `auth.json` |
 | `manager/README.md` | 运维细节：连接状态标签含义、故障恢复、彻底删除的逐项确认、接口参考 |
 | `docs/PRD.md` | 产品边界：给谁用、故意不做什么、成功标准与验收标准 |
-| `HANDOFF.md` | 维护者交接文档（含作者本机绝对路径） |
 
 想要开机自启和崩溃自拉起（也就是双击 App 那条路），跑一次安装器：
 
@@ -127,23 +125,18 @@ manager/install-launchagent             # 生成并加载 ~/Library/LaunchAgents
 
 ## 数据与隐私边界
 
-`.gitignore` 已经排除以下含真实账号、邮箱或浏览器登录态的路径：`manager/registry.json`、`manager/registry.json.bak`、`manager/backups/`、`tasks/*/auth.json`、`browser-data/`、`logs/`、`site/accounts.json`、`site/accounts.json`、`.gstack/`。另有一条 `skyvern/` 是历史守卫：那套 787M + AGPL 的上游 clone 已于 2026-10-02 整体删除，规则留着是防止有人再把它 clone 进来。
+本仓只有通用引擎：`manager/`（后端 + 前端 + 运维脚本）、`lib/`（Keychain 凭据与运行记录）、`docs/PRD.md`、`LICENSE`、根 `package.json`。不含任何具体站点的适配代码。
 
-下面是作者的个人运行层，不在 `.gitignore` 里（它们是代码，删数据文件不等于干净）。对外分发时按整块剔除：
+`.gitignore` 排除的都是运行时生成的个人数据：`manager/registry.json`（任务登记表：站点 URL、账号别名、launchd 标签都在里面）、`manager/registry.json.bak`、`manager/backups/`、`tasks/*/auth.json`（录制出来的登录态）、`browser-data/`（浏览器 Profile，含 Cookies 与 Local Storage）、`logs/`（运行日志与失败取证截图）、`recordings/`。另加 `.env`、`.env.*` 作守卫——本项目不读环境变量文件，但它们一旦出现在工作区就不该入库。还有一条 `skyvern/`：那套 787M + AGPL 的上游 clone 已删除，规则留着是防止有人再把它 clone 进来。
 
-| 路径 | 为什么是个人的 |
-| --- | --- |
-| `setup-local-keychain` | 只认那四个账号，且写死了作者本机的 nvm node 路径（`setup-local-keychain:44`） |
-| `HANDOFF.md`、`AGENT_SYSTEM_PROMPT.md` | 维护者/AI 交接文档，含 31 处本机绝对路径与真实账号信息 |
-
-真正可分发的核心是 `manager/` 加 `lib/keychain-credential.mjs`。
+作者自己按站点写的 runner、入口脚本与交接文档不在本仓，也不在本仓的历史里（它们含目标站点域名、签到判定标记和本机绝对路径）。想把你自己的适配层留在本地，同样的做法是写进 `.gitignore`，只分发 `manager/` 与 `lib/`。
 
 ## 已知限制（截至本版）
 
 - 只支持 macOS，没有 Linux/Windows 路径。
 - launchd 标签前缀可配置：任务标签默认 `com.pikachu.automation.<任务 ID>`，用 `AUTOMATION_LAUNCH_LABEL_PREFIX` 换掉（改了只影响新建任务，已登记的沿用各自存下的 `launchLabel`）。
 - 没有自动化测试，也没有 CI。改动只能靠上面的隔离实例手工验证。
-- 入参校验失败目前返回 HTTP 500 而不是 400，且会把 Node 原生错误消息透出来（`POST /api/recordings/create` 缺字段是最明显的一例）。
+- 前端构建产物 `manager/public/` 随源码一起入库，好处是克隆下来直接能跑，代价是改 `manager/web/src/` 后必须重新 `npm run build`，否则界面与后端静默失同步。
 
 ## 许可
 
