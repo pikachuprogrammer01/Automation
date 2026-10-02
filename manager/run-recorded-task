@@ -21,37 +21,41 @@ TASK="$BASE/tasks/$ID"
 LOG="$BASE/logs/$ID.log"
 LOCK="$TASK/.lock"
 mkdir -p "$BASE/logs"
+source "${0:A:h}/../lib/automation-run.zsh"
+run_ctx_init "" "$ID"
+RECORD="${0:A:h}/run-record.mjs"
+RUNNER_RESULT=""
+# 所有出口都过这里：先落运行记录，再按原退出码退出。观测层不改退出码。
+finish() {
+  run_record "${NODE:-}" "$RECORD" "$1"
+  exit "$1"
+}
 # 先确认脚本在，再拿锁：否则任务目录缺失会被 mkdir 判成“拿不到锁”，报成 already_running 并 0 退出。
 if [[ ! -f "$TASK/recorded.spec.js" ]]; then
   printf '%s {"status":"failed","reason":"script_not_found","task":"%s"}\n' "$(date '+%F %T')" "$ID" >> "$LOG"
-  exit 5
+  RUNNER_RESULT="{\"status\":\"failed\",\"reason\":\"script_not_found\",\"note\":\"$TASK/recorded.spec.js 不存在\"}"
+  finish 5
 fi
 if ! mkdir "$LOCK" 2>/dev/null; then
   printf '%s {"status":"skipped","reason":"already_running"}\n' "$(date '+%F %T')" >> "$LOG"
-  exit 0
+  RUNNER_RESULT='{"status":"skipped","reason":"already_running"}'
+  finish 0
 fi
 trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 
 # playwright CLI 的 shebang 是 `#!/usr/bin/env node`，而这里的 PATH 故意不含 nvm 目录，
-# 直接执行会 127。所以显式解析一个 node 可执行文件：管理器传入 > nvm 最新版 > 常见安装位置。
-NODE="${NODE_BIN:-}"
-if [[ ! -x "$NODE" ]]; then
-  NODE="$(ls -1d "$HOME"/.nvm/versions/node/*/bin/node(N) 2>/dev/null | sort -V | tail -1)"
-fi
-if [[ ! -x "$NODE" ]]; then
-  for c in /opt/homebrew/bin/node /usr/local/bin/node; do
-    [[ -x "$c" ]] && NODE="$c" && break
-  done
-fi
-if [[ ! -x "$NODE" ]]; then
+# 直接执行会 127。所以显式解析一个 node：管理器传入 > nvm 最新版 > Homebrew > /usr/local > PATH。
+resolve_node
+if [[ -z "$NODE" ]]; then
   printf '%s {"status":"failed","reason":"node_not_found"}\n' "$(date '+%F %T')" >> "$LOG"
-  exit 4
+  exit 4   # 没有 node 就发不出运行记录，这条只能留在日志里
 fi
 
 RUNNER="$BASE/manager/node_modules/.bin/playwright"
 if [[ ! -x "$RUNNER" ]]; then
   printf '%s {"status":"failed","reason":"playwright_cli_missing"}\n' "$(date '+%F %T')" >> "$LOG"
-  exit 3
+  RUNNER_RESULT='{"status":"failed","reason":"playwright_cli_missing","note":"先在 manager 下 npm install 装 @playwright/test"}'
+  finish 3
 fi
 
 # 任务目录在 manager/ 之外，Node 从 config/spec 向上找不到 @playwright/test。
@@ -67,4 +71,12 @@ printf '%s START node=%s\n' "$(date '+%F %T')" "$("$NODE" -v 2>/dev/null || echo
 "$NODE" "$RUNNER" test recorded.spec.js --config playwright.config.mjs >> "$LOG" 2>&1
 RC=$?
 printf '%s EXIT=%s\n' "$(date '+%F %T')" "$RC" >> "$LOG"
-exit "$RC"
+# 录制任务是用户自己的 Playwright 脚本，没有站点语义可报：状态看退出码，
+# note 取日志最后一行，证据由 Playwright 自己的 test-results/ 截图承担。
+LAST=$(tail -1 "$LOG" 2>/dev/null | cut -c1-200)
+if (( RC == 0 )); then
+  RUNNER_RESULT="{\"status\":\"completed\",\"note\":\"$LAST\"}"
+else
+  RUNNER_RESULT="{\"status\":\"failed\",\"reason\":\"playwright_failed\",\"note\":\"$LAST\"}"
+fi
+finish "$RC"

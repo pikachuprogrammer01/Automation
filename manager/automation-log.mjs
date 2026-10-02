@@ -104,19 +104,27 @@ if (opt.mode === 'stale') {
   }
   const rows = [];
   for (const t of tasks) {
-    if (!launchdLoaded(t)) { rows.push({ task: t.id, verdict: '未启用/已暂停', note: '不参与漏跑判断' }); continue; }
-    const last = queryRuns(base, { days: 30, task: t.id, statuses: ['completed'], limit: 1 })[0] || null;
-    const h = last ? ageHours(last.ts) : null;
-    if (!last) rows.push({ task: t.id, verdict: '从没成功过', note: '查 automation-log --task ' + t.id });
-    else if (h > opt.hours) rows.push({ task: t.id, verdict: '漏跑', note: '最后一次成功 ' + humanAge(h) });
+    if (!launchdLoaded(t)) { rows.push({ task: t.id, verdict: '未启用', note: '不参与漏跑判断' }); continue; }
+    const mine = queryRuns(base, { days: 30, task: t.id });
+    if (!mine.length) { rows.push({ task: t.id, verdict: '无记录', note: '刚上线还没跑过，或用 --days 拉长窗口' }); continue; }
+    const last = mine.find((r) => r.status === 'completed') || null;
+    if (!last) {
+      rows.push({ task: t.id, verdict: '只有失败', note: `最近一次 ${mine[0].status}/${mine[0].reason}` });
+      continue;
+    }
+    const h = ageHours(last.ts);
+    if (h > opt.hours) rows.push({ task: t.id, verdict: '漏跑', note: `最后一次成功 ${humanAge(h)}` });
     else rows.push({ task: t.id, verdict: '正常', note: humanAge(h) });
   }
   if (opt.json) console.log(JSON.stringify(rows, null, 2));
   else {
-    for (const r of rows) console.log(r.verdict.padEnd(12) + String(r.task).padEnd(16) + r.note);
-    const bad = rows.filter((r) => r.verdict === '漏跑' || r.verdict === '从没成功过').length;
+    for (const r of rows) console.log(r.verdict.padEnd(10) + String(r.task).padEnd(16) + r.note);
+    const bad = rows.filter((r) => r.verdict === '漏跑' || r.verdict === '只有失败').length;
+    const unknown = rows.filter((r) => r.verdict === '无记录').length;
     console.log('');
-    console.log(bad ? bad + ' 个任务需要看' : '没有漏跑');
+    if (bad) console.log(bad + ' 个任务需要看');
+    else if (unknown) console.log('没有漏跑；' + unknown + ' 个任务还没有记录（刚上线属正常）');
+    else console.log('没有漏跑');
   }
   process.exit(0);
 }

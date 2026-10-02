@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
+import { lastRunFor } from '../lib/run-result.mjs';
 
 const HOME = os.homedir();
 const UID = process.getuid();
@@ -165,6 +166,30 @@ function credentialInfo(task) {
   }
   return { backend: task.credentialBackend || '无', service: null, username: null };
 }
+/**
+ * 界面上的「上次运行」优先取内存（管理器自己拉起的那次，信息最全），
+ * 没有就回落到 logs/runs/ 的最后一条 —— 否则重启管理器历史就没了，
+ * 而且 launchd 定时跑的那几次本来就不经过内存。
+ */
+function diskLastRun(task) {
+  const r = lastRunFor(BASE, task.id);
+  if (!r) return null;
+  return {
+    kind: r.trigger === 'test' ? '测试中' : '运行中',
+    startedAt: r.startedAt || r.ts,
+    endedAt: r.endedAt || null,
+    code: Number.isFinite(r.exitCode) ? r.exitCode : null,
+    ok: r.status === 'completed',
+    runId: r.runId || null,
+    status: r.status || null,
+    reason: r.reason || null,
+    note: r.note || null,
+    durationS: Number.isFinite(r.durationS) ? r.durationS : null,
+    evidence: Array.isArray(r.evidence) ? r.evidence : [],
+    trigger: r.trigger || null,
+    fromDisk: true,
+  };
+}
 function taskView(task) {
   const credential = credentialInfo(task);
   return {
@@ -180,7 +205,7 @@ function taskView(task) {
     credentialUsername: credential.username || null,
     lastLog: tailLine(task.logPath, task.accountKey),
     active: active.get(task.id) || null,
-    lastRun: results.get(task.id) || null,
+    lastRun: results.get(task.id) || diskLastRun(task) || null,
   };
 }
 function xml(s) {
@@ -251,7 +276,8 @@ function runTask(task, env = {}) {
     detached: true,
     stdio: 'ignore',
     // launchd 给的 PATH 里没有 nvm 的 node；把自己就是 node 这件事告诉子脚本。
-    env: { ...process.env, NODE_BIN: process.execPath, ...env },
+    // trigger/task 让 wrapper 知道这次是谁点的（docs/OBSERVABILITY.md）。
+    env: { ...process.env, NODE_BIN: process.execPath, AUTOMATION_TRIGGER: 'manager', AUTOMATION_TASK: task.id, AUTOMATION_SITE: task.site || '', ...env },
   });
   proc.unref();
   markActive(task, '运行中', proc, true);
@@ -369,7 +395,8 @@ function openCode(task) {
 function testRecorded(task) {
   if (active.has(task.id)) throw busyError(task);
   const proc = spawn('/bin/zsh', [path.join(ROOT, 'run-recorded-task'), task.id], {
-    stdio: 'ignore', env: { ...process.env, NODE_BIN: process.execPath, PW_HEADLESS: '0' },
+    stdio: 'ignore',
+    env: { ...process.env, NODE_BIN: process.execPath, PW_HEADLESS: '0', AUTOMATION_TRIGGER: 'test', AUTOMATION_TASK: task.id, AUTOMATION_SITE: task.site || '' },
   });
   markActive(task, '测试中', proc, true);
   return proc.pid;

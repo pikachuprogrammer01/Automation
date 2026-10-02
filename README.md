@@ -81,6 +81,20 @@ AUTOMATION_MANAGER_PORT=4799 node manager/server.mjs
 | `NODE_BIN` | 自动探测 | 子脚本用哪个 node（管理器会自动传入自己这个） |
 | `PW_HEADLESS` | 非 `0` 即无头 | 「可视化测试」时设 `0` 让浏览器可见 |
 
+## 查运行历史与故障
+
+每次运行都会往 `logs/runs/<日期>.jsonl` 落一条结构化记录，失败时同时把截图和页面文本留在 `logs/diagnostics/`。查它们不用翻日志：
+
+```bash
+manager/automation-log.mjs                       # 最近 20 次
+manager/automation-log.mjs --failed --days 7     # 这周哪些失败了、为什么
+manager/automation-log.mjs --task demo-a   # 单个任务历史（判断是不是偶发）
+manager/automation-log.mjs --run <runId> --open  # 摊开一次运行并打开它的截图
+manager/automation-log.mjs --stale               # 已启用但超时没有成功记录的任务
+```
+
+定时运行（launchd 触发）失败会弹 macOS 通知，同一任务同一原因当天只提醒一次；界面点和终端手跑不弹，因为当场就能看到。完整设计见 `docs/OBSERVABILITY.md`，需求与验收见 `docs/OBSERVABILITY-PRD.md`。
+
 ## 代码在哪
 
 | 路径 | 作用 |
@@ -91,6 +105,9 @@ AUTOMATION_MANAGER_PORT=4799 node manager/server.mjs
 | `manager/registry.json` | 任务登记表（个人数据，已 gitignore） |
 | `manager/open-manager` | 本机日常入口：健康就复用，不健康才拉起服务并打开页面（需要 LaunchAgent，见下） |
 | `manager/install-launchagent` | 生成并加载管理器的 LaunchAgent；`--dry-run` 先看，`--uninstall` 卸载 |
+| `manager/automation-log.mjs` | 查运行记录、失败原因、证据文件、漏跑任务 |
+| `manager/run-record.mjs` | 每次运行时落一条记录（由 wrapper 调用，不用手动跑） |
+| `docs/OBSERVABILITY.md` | 错误排查体系设计：runId、记录格式、提醒规则、保留清理 |
 | `manager/run-recorded-task` | 录制任务的执行器：解析 node、建 `tasks/node_modules` 软链、加锁、写日志 |
 | `tasks/<任务 ID>/` | 每个录制任务的 `recorded.spec.js` / `playwright.config.mjs` / `auth.json` |
 | `manager/README.md` | 运维细节：连接状态标签含义、故障恢复、彻底删除的逐项确认、接口参考 |
