@@ -5,7 +5,6 @@
 
 ## 边界（先说清楚）
 
-- **AS IS，无担保，不提供支持。** MIT 协议原文见 `LICENSE`，其中已包含完整的免责与责任上限条款。作者不承诺修复、不承诺兼容、不承诺响应 issue。
 - **不针对任何第三方站点做合规评估。** 本工具能自动化任何网页，但目标站点的服务条款是否允许脚本化访问，由使用者自己确认并承担后果。作者未做这项评估，也不为任何具体站点的用法背书。
 - **示例只用内置演示站点。** 仓内自带的 `http://127.0.0.1:<port>/demo/` 是纯本地假站点，专门用来演示录制与状态判定。作者实际使用的站点专用 runner 不在发布范围内（见「数据与隐私边界」）。
 
@@ -14,16 +13,17 @@
 | 需要 | 版本 | 说明 |
 | --- | --- | --- |
 | macOS | 任意近期版本 | 定时、凭据、进程托管都建立在 launchd + macOS Keychain 上 |
-| Node.js | ≥ 18 | 实测 v24.18.0。脚本用 ESM 与 `Array.at`，16 以下会报错 |
-| Google Chrome | 稳定版 | 登录与录制用系统 Chrome（`manager/server.mjs:18` 写死路径） |
+| Node.js | ≥ 20.11 | 实测 v24.18.0。下限由 `import.meta.dirname`（数据根推导）决定，20.11 以下直接崩；`@playwright/test` 依赖的 `playwright-core` 也要求 ≥ 20 |
+| Google Chrome | 稳定版 | 登录与录制用系统 Chrome（`manager/server.mjs` 里的 `CHROME` 常量写死路径） |
 
-## 跑起来
+## setup
 
 ### 1. 只想起服务、看界面（零 npm 依赖）
 
 ```bash
-cp manager/registry.example.json manager/registry.json   # 首次：生成空的任务登记表
-npm start                                                # 等价于 node manager/server.mjs
+mkdir -p var
+cp manager/registry.example.json var/registry.json   # 首次：生成空的任务登记表
+npm start                                           # 等价于 node manager/server.mjs
 ```
 
 打开 `http://127.0.0.1:4765`。空登记表下界面会给「还没有任务 / 新建自动化」的引导。
@@ -36,7 +36,7 @@ AUTOMATION_MANAGER_PORT=4788 npm start
 
 ### 2. 先拿内置演示站点练一遍（不联网，不含任何真实站点）
 
-`http://127.0.0.1:4765/demo/` 是随构建产物一起入库的本地假站点，带「立即签到 / 今日已签到」和「立即抽奖 / 暂无抽奖机会」，状态存在你自己浏览器的 localStorage，页面上有重置按钮。
+`http://127.0.0.1:4765/demo/` 是随构建产物一起入库的本地假站点，带「立即签到 / 今日已签到」和「立即抽奖 / 已参与」，状态存在你自己浏览器的 localStorage，页面上有重置按钮。
 
 界面右上「新建自动化」→ 网址填 `http://127.0.0.1:4765/demo/` → 依次点 ① 准备登录 → ② 开始录制 → ③ 打开代码 → ④ 可视化测试。
 
@@ -60,12 +60,12 @@ npm run dev                         # 或者本地开发：http://127.0.0.1:4760
 
 ## 试改不动本机数据
 
-**两个变量都要设。** `AUTOMATION_HOME` 只搬任务脚本、Profile 和日志的根目录；登记表 `manager/registry.json` 默认跟着 `server.mjs` 所在目录走，**不受 `AUTOMATION_HOME` 影响**。只设前一个就动手写接口，改的就是你正在跑的那份生产登记表。服务启动时会把 `base=` 和 `registry=` 两行打进 stdout，起完先看一眼。
+**一个变量就够。** `AUTOMATION_HOME` 指到哪，任务脚本、浏览器 Profile、日志和登记表 `registry.json` 就全在哪 —— 同一个根，不存在"设了一个漏了另一个，结果改到正在跑的生产登记表"这种坑。服务启动会把 `base=` 和 `registry=` 两行打进 stdout，起完先看一眼：两行都该落在你的沙箱里。
 
 ```bash
-AUTOMATION_HOME=/tmp/automation-trial \
-AUTOMATION_MANAGER_REGISTRY=/tmp/automation-trial/registry.json \
-AUTOMATION_MANAGER_PORT=4799 node manager/server.mjs
+mkdir -p /tmp/automation-trial/var
+cp manager/registry.example.json /tmp/automation-trial/var/registry.json
+AUTOMATION_HOME=/tmp/automation-trial/var AUTOMATION_MANAGER_PORT=4799 node manager/server.mjs
 ```
 
 想连 LaunchAgent 和凭据都不碰到，再加一个假 HOME：`HOME=/tmp/automation-trial-home`。plist 路径、Chrome Profile 等都从 `$HOME` 推导，生产会话的 launchd 域不会被写入。
@@ -75,15 +75,18 @@ AUTOMATION_MANAGER_PORT=4799 node manager/server.mjs
 | 变量 | 默认值 | 作用 |
 | --- | --- | --- |
 | `AUTOMATION_MANAGER_PORT` | `4765` | 监听端口，只绑 `127.0.0.1` |
-| `AUTOMATION_HOME` | 仓根 | 数据根：`tasks/`、`logs/`、`browser-data/` |
-| `AUTOMATION_MANAGER_REGISTRY` | `manager/registry.json` | 任务登记表路径。**不跟随 `AUTOMATION_HOME`**，隔离时必须单独设 |
+| `AUTOMATION_HOME` | 仓根的 `var/` | 数据根：`tasks/`、`logs/`、`browser-data/`、`registry.json` 全在这里 |
+| `AUTOMATION_MANAGER_REGISTRY` | `$AUTOMATION_HOME/registry.json` | 单独指定登记表位置。默认就跟着 `AUTOMATION_HOME` 走，隔离时不必设 |
 | `AUTOMATION_LAUNCH_LABEL_PREFIX` | `com.pikachu.automation` | 新建任务的 launchd 标签前缀；只影响新建，已登记任务用自己的 `launchLabel` |
 | `NODE_BIN` | 自动探测 | 子脚本用哪个 node（管理器会自动传入自己这个） |
 | `PW_HEADLESS` | 非 `0` 即无头 | 「可视化测试」时设 `0` 让浏览器可见 |
+| `AUTOMATION_OSASCRIPT` | `/usr/bin/osascript` | 提醒走的命令。测试里指向垫片即可避免弹真实通知，日常不用设 |
+| `AUTOMATION_LAUNCHCTL` | `/bin/launchctl` | 同上，测试用垫片挡住真实 launchd 域，日常不用设 |
+| `AUTOMATION_PLUTIL` | `/usr/bin/plutil` | 同上，plist 语法校验用的命令 |
 
 ## 查运行历史与故障
 
-每次运行都会往 `logs/runs/<日期>.jsonl` 落一条结构化记录，失败时同时把截图和页面文本留在 `logs/diagnostics/`。查它们不用翻日志：
+每次运行都会往 `var/logs/runs/<日期>.jsonl` 落一条结构化记录，失败时同时把截图和页面文本留在 `var/logs/diagnostics/`。查它们不用翻日志：
 
 ```bash
 manager/automation-log.mjs                       # 最近 20 次
@@ -97,20 +100,43 @@ manager/automation-log.mjs --stale               # 已启用但超时没有成�
 
 ## 代码在哪
 
+仓里只有三个区，这个划分决定什么东西会进版本库：
+
+| 区 | 内容 | 入库 |
+| --- | --- | --- |
+| `manager/` `lib/` `docs/` `README.md` `LICENSE` `package.json` | **发布内核**：引擎后端、前端、共享模块 | 是 |
+| `private/` | **你自己的站点适配层**：按站点写的 runner 与入口脚本 | 否，`.gitignore` 一行挡住整棵 |
+| `var/` | **运行期数据**：登记表、录制任务、日志、浏览器 Profile | 否，同上 |
+
+`private/` 和 `var/` 不随本仓分发，克隆下来是空的。排除规则写在**入库的** `.gitignore` 里而不是 `.git/info/exclude`，所以重新克隆后依然生效 —— 后者不随仓库走，一旦忘记补回，一次 `git add -A` 就会把站点名和账号写进无法事后清洗的 git 历史。
+
+引擎：
+
 | 路径 | 作用 |
 | --- | --- |
 | `manager/server.mjs` | 唯一的后端：任务读写、launchd 操作、录制/登录/测试进程托管、静态托管前端 |
 | `manager/web/` | 前端源码：React 18 + TypeScript + Ant Design v5 + Vite |
 | `manager/public/` | 前端构建产物，**不要手改** |
-| `manager/registry.json` | 任务登记表（个人数据，已 gitignore） |
 | `manager/open-manager` | 本机日常入口：健康就复用，不健康才拉起服务并打开页面（需要 LaunchAgent，见下） |
 | `manager/install-launchagent` | 生成并加载管理器的 LaunchAgent；`--dry-run` 先看，`--uninstall` 卸载 |
 | `manager/automation-log.mjs` | 查运行记录、失败原因、证据文件、漏跑任务 |
 | `manager/run-record.mjs` | 每次运行时落一条记录（由 wrapper 调用，不用手动跑） |
-| `manager/run-recorded-task` | 录制任务的执行器：解析 node、建 `tasks/node_modules` 软链、加锁、写日志 |
-| `tasks/<任务 ID>/` | 每个录制任务的 `recorded.spec.js` / `playwright.config.mjs` / `auth.json` |
+| `manager/run-recorded-task` | 录制任务的执行器：解析 node、建 `var/tasks/node_modules` 软链、加锁、写日志 |
+| `lib/run-result.mjs` | 数据根（`baseDir()`）、运行记录、状态与原因词表的**单一来源** |
+| `lib/keychain-credential.mjs` | 从 macOS Keychain 取凭据 |
+| `lib/automation-run.zsh` | 入口脚本共用的一次运行上下文（runId、触发来源、记录写入） |
 | `manager/README.md` | 运维细节：连接状态标签含义、故障恢复、彻底删除的逐项确认、接口参考 |
 | `docs/PRD.md` | 产品边界：给谁用、故意不做什么、成功标准与验收标准 |
+
+数据（都在 `var/` 下，全部 gitignore）：
+
+| 路径 | 作用 |
+| --- | --- |
+| `var/registry.json` | 任务登记表：站点 URL、账号别名、排期、launchd 标签 |
+| `var/tasks/<任务 ID>/` | 每个录制任务的 `recorded.spec.js` / `playwright.config.mjs` / `auth.json` |
+| `var/logs/runs/<日期>.jsonl` | 每次运行一条结构化记录 |
+| `var/logs/diagnostics/` | 失败取证的截图与页面文本 |
+| `var/browser-data/` | Chrome Profile，含 Cookies 与 Local Storage |
 
 想要开机自启和崩溃自拉起（也就是双击 App 那条路），跑一次安装器：
 
@@ -125,18 +151,45 @@ manager/install-launchagent             # 生成并加载 ~/Library/LaunchAgents
 
 ## 数据与隐私边界
 
-本仓只有通用引擎：`manager/`（后端 + 前端 + 运维脚本）、`lib/`（Keychain 凭据与运行记录）、`docs/PRD.md`、`LICENSE`、根 `package.json`。不含任何具体站点的适配代码。
+三个区，两条排除规则，都写在**入库的** `.gitignore` 里：
 
-`.gitignore` 排除的都是运行时生成的个人数据：`manager/registry.json`（任务登记表：站点 URL、账号别名、launchd 标签都在里面）、`manager/registry.json.bak`、`manager/backups/`、`tasks/*/auth.json`（录制出来的登录态）、`browser-data/`（浏览器 Profile，含 Cookies 与 Local Storage）、`logs/`（运行日志与失败取证截图）、`recordings/`。另加 `.env`、`.env.*` 作守卫——本项目不读环境变量文件，但它们一旦出现在工作区就不该入库。还有一条 `skyvern/`：那套 787M + AGPL 的上游 clone 已删除，规则留着是防止有人再把它 clone 进来。
+| 区 | 内容 | 入库 |
+| --- | --- | --- |
+| `manager/` `lib/` `docs/` + `README.md` `LICENSE` `package.json` | 通用引擎：后端、前端、共享模块。不含任何具体站点的适配代码 | 是 |
+| `private/` | 使用者自己按站点写的 runner、入口脚本、交接文档。含目标站点域名、签到判定标记、本机绝对路径 | 否 |
+| `var/` | 运行期个人数据：`registry.json`（站点 URL、账号别名、launchd 标签）、`tasks/*/auth.json`（录制出来的登录态）、`browser-data/`（Cookies 与 Local Storage）、`logs/`（运行日志与失败取证截图）、`backups/` | 否 |
 
-作者自己按站点写的 runner、入口脚本与交接文档不在本仓，也不在本仓的历史里（它们含目标站点域名、签到判定标记和本机绝对路径）。想把你自己的适配层留在本地，同样的做法是写进 `.gitignore`，只分发 `manager/` 与 `lib/`。
+另加 `.env`、`.env.*` 作守卫——本项目不读环境变量文件，但它们一旦出现在工作区就不该入库。还有一条 `skyvern/`：那套 787M + AGPL 的上游 clone 已删除，规则留着是防止有人再把它 clone 进来。
+
+**为什么排除规则必须在 `.gitignore` 而不是 `.git/info/exclude`**：后者不随仓库走，重新克隆后就没了；此后再来一次 `git add -A`，站点名和账号就被写进 git 历史 —— 而历史是 `.gitignore` 事后清不掉的东西。所以本仓的边界靠 `private/` 与 `var/` 这两个**目录名**成立，不靠任何只存在于单台机器上的配置。
+
+把自己的 runner 留在本地、只分发引擎，做法就是放进 `private/`：那一行排除规则天然替你守着，不用记着补配置。
+
+## 测试
+
+```bash
+npm test              # 全部用例，不装任何依赖
+npm run test:coverage # 带每文件覆盖率报告
+npm run test:ci       # 同上 + 覆盖率门禁（行 ≥90 / 分支 ≥85），CI 跑这个
+```
+
+`node:test` 自带，所以 `npm test` 在空 `node_modules` 上也能跑。四分层：
+
+| 层 | 位置 | 覆盖什么 | 需要装依赖 |
+| --- | --- | --- | --- |
+| 纯逻辑 | `test/lib.run-result.test.mjs` | 状态与原因词表、时间键、数据根、记录读写与清理、提醒去重 | 否 |
+| API 契约 | `test/api.contract.test.mjs` | 入参校验矩阵、错误码、409 并发、403 跨站、413/422/503 | 否 |
+| 生命周期 | `test/e2e.lifecycle.test.mjs` | 建→定时→运行→暂停→启用→移除→删除全链路；`launchctl` 调用序列 | 否 |
+| 故障注入 | `test/fault.*.test.mjs` | 被强杀后的锁接管、连接被拒、500、挂站超时、DNS 失败、只读目录 | 网络层需要 |
+
+副作用全走注入点（`AUTOMATION_LAUNCHCTL` / `AUTOMATION_PLUTIL` / `AUTOMATION_OSASCRIPT`），加上假 `HOME` 与独立 launchd 标签前缀，**测试不会碰到真实 launchd 域、真实凭据或生产登记表**。另有 `test/docs.drift.test.mjs` 机械校验文档与实现是否还一致。
 
 ## 已知限制（截至本版）
 
 - 只支持 macOS，没有 Linux/Windows 路径。
 - launchd 标签前缀可配置：任务标签默认 `com.pikachu.automation.<任务 ID>`，用 `AUTOMATION_LAUNCH_LABEL_PREFIX` 换掉（改了只影响新建任务，已登记的沿用各自存下的 `launchLabel`）。
-- 没有自动化测试，也没有 CI。改动只能靠上面的隔离实例手工验证。
-- 前端构建产物 `manager/public/` 随源码一起入库，好处是克隆下来直接能跑，代价是改 `manager/web/src/` 后必须重新 `npm run build`，否则界面与后端静默失同步。
+- 前端构建产物 `manager/public/` 随源码一起入库，好处是克隆下来直接能跑，代价是改 `manager/web/src/` 后必须重新 `npm run build`，否则界面与后端静默失同步。CI 的 `artifact` 作业专门盯这条。
+- 网络异常与强杀接管两类用例需要 `cd manager && npm install`，否则自动 skip（CI 里由 `deps` 作业真跑）。
 
 ## 许可
 

@@ -49,6 +49,37 @@ run_ctx_init() {
   export AUTOMATION_SITE="$site"
 }
 
+# ── 并发锁 ────────────────────────────────────────────────
+# 只靠 `mkdir "$LOCK"` 失败就记 skipped 并以 0 退出，有个致命后果：被 SIGKILL 的上一轮
+# 不会执行 EXIT trap，锁目录永远留在原地，于是此后每天都是「skipped + 成功」，
+# 任务永久停跑，而 skipped 不在 ALERT_STATUSES 里，一条通知都不会发。
+# 规则：锁目录里写 pid。pid 不存活就接管并把 lock_stale 记进运行记录，
+# 让"停跑"不可能再伪装成"无事可做"。宁可偶发并发，也不要永久静默停跑。
+acquire_lock() {
+  local lock="$1" owner=""
+  LOCK_STALE=0
+  export AUTOMATION_LOCK_STALE=0
+  if mkdir "$lock" 2>/dev/null; then
+    printf '%s\n' "$$" > "$lock/pid" 2>/dev/null
+    return 0
+  fi
+  owner="$(cat "$lock/pid" 2>/dev/null)"
+  if [[ -n "$owner" ]] && kill -0 "$owner" 2>/dev/null; then
+    return 1                                   # 确实有一轮在跑，让位
+  fi
+  LOCK_STALE=1
+  export AUTOMATION_LOCK_STALE=1
+  rm -rf -- "$lock"
+  mkdir "$lock" 2>/dev/null || return 1
+  printf '%s\n' "$$" > "$lock/pid" 2>/dev/null
+  return 0
+}
+
+release_lock() {
+  [[ -n "${1:-}" && -d "$1" ]] && rm -rf -- "$1"
+  return 0
+}
+
 run_record() {
   local node="$1" script="$2" code="$3"
   _node_is_usable "$node" || return 0

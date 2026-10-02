@@ -4,7 +4,7 @@ set -u
 # 约定：plist 是配置真源，open-manager 也从这里读 Label 和端口。
 
 ROOT="${0:A:h}"
-BASE="${AUTOMATION_HOME:-${ROOT:h}}"
+BASE="${AUTOMATION_HOME:-${ROOT:h}/var}"
 LABEL="com.pikachu.automation-manager"
 PORT="4765"
 NODE=""
@@ -17,7 +17,7 @@ usage() {
     '生成 ~/Library/LaunchAgents/<label>.plist 并加载，让管理器开机自启、崩溃自拉起。' '' \
     '选项：' \
     '  --port <n>      监听端口，默认 4765（只绑 127.0.0.1）' \
-    '  --home <dir>    数据根目录（tasks/ logs/ browser-data/），默认本仓根目录' \
+    '  --home <dir>    数据根目录（tasks/ logs/ browser-data/），默认本仓根目录下的 var/' \
     '  --node <path>   node 可执行文件，默认按 NODE_BIN → nvm 最新版 → Homebrew → /usr/local → PATH 依次找' \
     '  --label <name>  LaunchAgent 标签，默认 com.pikachu.automation-manager；改了 open-manager 会自动跟着读' \
     '  --dry-run       只打印将要写入的 plist 和将执行的命令，不落盘、不碰 launchd' \

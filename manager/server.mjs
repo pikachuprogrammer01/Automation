@@ -4,23 +4,25 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
-import { lastRunFor } from '../lib/run-result.mjs';
+import { baseDir, lastRunFor } from '../lib/run-result.mjs';
 
 const HOME = os.homedir();
 const UID = process.getuid();
-// 仓库根从自身文件位置推导，不假设项目目录叫什么名字；
-// AUTOMATION_HOME 只用于把整棵数据目录指到别处（测试/迁移用）。
+// ROOT = manager/ 自身；BASE = 数据根（var/），来源统一在 lib/run-result.mjs 的 baseDir()
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-const BASE = process.env.AUTOMATION_HOME || path.dirname(ROOT);
+const BASE = baseDir();
 const PUBLIC = path.join(ROOT, 'public');
 const TASKS = path.join(BASE, 'tasks');
 // 允许把登记表指向别处：回归测试用独立 registry，避免误触发真实签到任务。
-const REGISTRY = process.env.AUTOMATION_MANAGER_REGISTRY || path.join(ROOT, 'registry.json');
+const REGISTRY = process.env.AUTOMATION_MANAGER_REGISTRY || path.join(BASE, 'registry.json');
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const PORT = Number(process.env.AUTOMATION_MANAGER_PORT || 4765);
 // 新建任务生成的 launchd 标签前缀。默认值沿用作者机器的历史命名；
 // 已登记的任务读自己的 launchLabel 字段，改这个变量不会影响它们。
 const LABEL_PREFIX = process.env.AUTOMATION_LAUNCH_LABEL_PREFIX || 'com.pikachu.automation';
+// 外部命令允许注入：测试用垫片挡住真实 launchd 域（PRD 验收标准 8），日常不用设。
+const LAUNCHCTL = process.env.AUTOMATION_LAUNCHCTL || '/bin/launchctl';
+const PLUTIL = process.env.AUTOMATION_PLUTIL || '/usr/bin/plutil';
 if (!/^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(LABEL_PREFIX)) {
   throw new Error(`AUTOMATION_LAUNCH_LABEL_PREFIX 不合法：${LABEL_PREFIX}（只允许字母、数字、点和连字符）`);
 }
@@ -62,7 +64,7 @@ function loadRegistry() {
     raw = fs.readFileSync(REGISTRY, 'utf8');
   } catch (e) {
     if (e?.code === 'ENOENT') {
-      throw new ApiError('registry_missing', `任务登记表不存在：${toPortable(REGISTRY)}`, '执行 cp manager/registry.example.json manager/registry.json 生成一份空登记表', 503);
+      throw new ApiError('registry_missing', `任务登记表不存在：${toPortable(REGISTRY)}`, '执行 cp manager/registry.example.json var/registry.json 生成一份空登记表', 503);
     }
     throw e;
   }
@@ -110,7 +112,7 @@ async function collectBody(req) {
   for await (const chunk of req) chunks.push(chunk);
   if (!chunks.length) return {};
   const text = Buffer.concat(chunks).toString('utf8');
-  if (text.length > 64 * 1024) throw new ApiError('request_too_large', `请求体过大（${text.length} 字节，上限 64KB）`, undefined, 413);
+  if (text.length > 64 * 1024) throw new ApiError('request_too_large', `请求体过大（${text.length} 字节，上限 64KB）`, '本接口不接收大内容；网址和任务名都该是短字符串', 413);
   return JSON.parse(text);
 }
 function validId(id) {
@@ -121,11 +123,11 @@ function runSync(file, args = [], options = {}) {
 }
 function isLoaded(task) {
   if (!task?.launchLabel) return false;
-  return runSync('/bin/launchctl', ['print', `gui/${UID}/${task.launchLabel}`]).status === 0;
+  return runSync(LAUNCHCTL, ['print', `gui/${UID}/${task.launchLabel}`]).status === 0;
 }
 function readSchedule(task) {
   if (!task.plistPath || !fs.existsSync(task.plistPath)) return task.defaultSchedule || null;
-  const p = runSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', task.plistPath]);
+  const p = runSync(PLUTIL, ['-convert', 'json', '-o', '-', task.plistPath]);
   if (p.status !== 0) return task.defaultSchedule || null;
   try {
     const data = JSON.parse(p.stdout);
@@ -228,7 +230,7 @@ function plistText(task, hour, minute) {
     `</dict></plist>\n`;
 }
 function bootout(task) {
-  runSync('/bin/launchctl', ['bootout', `gui/${UID}/${task.launchLabel}`]);
+  runSync(LAUNCHCTL, ['bootout', `gui/${UID}/${task.launchLabel}`]);
 }
 function installTask(task, schedule) {
   const { hour, minute } = schedule;
@@ -237,19 +239,19 @@ function installTask(task, schedule) {
   }
   fs.mkdirSync(path.dirname(task.plistPath), { recursive: true });
   fs.writeFileSync(task.plistPath, plistText(task, hour, minute));
-  runSync('/usr/bin/plutil', ['-lint', task.plistPath]);
+  runSync(PLUTIL, ['-lint', task.plistPath]);
   bootout(task);
-  runSync('/bin/launchctl', ['enable', `gui/${UID}/${task.launchLabel}`]);
-  const r = runSync('/bin/launchctl', ['bootstrap', `gui/${UID}`, task.plistPath]);
+  runSync(LAUNCHCTL, ['enable', `gui/${UID}/${task.launchLabel}`]);
+  const r = runSync(LAUNCHCTL, ['bootstrap', `gui/${UID}`, task.plistPath]);
   if (r.status !== 0 && !isLoaded(task)) {
-    throw new ApiError('launchctl_bootstrap_failed', `launchd 没能加载 ${task.launchLabel}，定时未生效`, (r.stderr || '').trim() || `看 logs/automation-manager.err 与 ${toPortable(task.plistPath)}`, 500);
+    throw new ApiError('launchctl_bootstrap_failed', `launchd 没能加载 ${task.launchLabel}，定时未生效`, (r.stderr || '').trim() || `看 var/logs/automation-manager.err 与 ${toPortable(task.plistPath)}`, 500);
   }
 }
 function disableTask(task) {
   bootout(task);
-  runSync('/bin/launchctl', ['disable', `gui/${UID}/${task.launchLabel}`]);
+  runSync(LAUNCHCTL, ['disable', `gui/${UID}/${task.launchLabel}`]);
   if (isLoaded(task)) {
-    throw new ApiError('disable_failed', `${task.launchLabel} 仍处于已加载状态，暂停未生效`, '看 logs/automation-manager.err 里 launchctl 的报错', 500);
+    throw new ApiError('disable_failed', `${task.launchLabel} 仍处于已加载状态，暂停未生效`, '看 var/logs/automation-manager.err 里 launchctl 的报错', 500);
   }
 }
 function enableTask(task) {
@@ -258,10 +260,10 @@ function enableTask(task) {
 }
 function removeSchedule(task) {
   bootout(task);
-  runSync('/bin/launchctl', ['enable', `gui/${UID}/${task.launchLabel}`]);
+  runSync(LAUNCHCTL, ['enable', `gui/${UID}/${task.launchLabel}`]);
   if (task.plistPath && fs.existsSync(task.plistPath)) fs.rmSync(task.plistPath);
   if (isLoaded(task)) {
-    throw new ApiError('remove_schedule_failed', `${task.launchLabel} 仍在 launchd 中，移除定时未生效`, '看 logs/automation-manager.err 里 launchctl 的报错', 500);
+    throw new ApiError('remove_schedule_failed', `${task.launchLabel} 仍在 launchd 中，移除定时未生效`, '看 var/logs/automation-manager.err 里 launchctl 的报错', 500);
   }
 }
 function busyError(task) {
@@ -269,7 +271,7 @@ function busyError(task) {
 }
 function runTask(task, env = {}) {
   if (!Array.isArray(task.command) || !task.command.length) {
-    throw new ApiError('task_has_no_command', `任务 ${task.id} 没有配置 command`, '检查 manager/registry.json 里该任务的 command 数组', 422);
+    throw new ApiError('task_has_no_command', `任务 ${task.id} 没有配置 command`, '检查 var/registry.json 里该任务的 command 数组', 422);
   }
   if (active.has(task.id)) throw busyError(task);
   const proc = spawn(task.command[0], task.command.slice(1), {
@@ -307,7 +309,7 @@ function createRecordedTask({ id, name, url, blank }) {
   if (typeof id !== 'string' || !id) throw new ApiError('missing_id', '缺少任务 ID', '任务 ID 用小写字母、数字和连字符，2-41 位');
   if (!validId(id)) throw new ApiError('invalid_id', `任务 ID 不合法：${id}`, '只能使用小写字母、数字和连字符，2-41 位，且以字母或数字开头');
   if (typeof name !== 'string' || !name.trim()) throw new ApiError('missing_name', '缺少任务名称', '给任务起个能认出来的名字');
-  if (name.length > 80) throw new ApiError('name_too_long', `任务名称过长（${name.length} 字符，上限 80）`);
+  if (name.length > 80) throw new ApiError('name_too_long', `任务名称过长（${name.length} 字符，上限 80）`, '名字只用来在列表里认人，80 字符够了');
   if (typeof url !== 'string' || !url.trim()) throw new ApiError('missing_url', '缺少网址', '例如 http://127.0.0.1:4765/demo/ 或你自己要自动化的页面');
   let u;
   try {
@@ -552,16 +554,16 @@ const server = http.createServer(async (req, res) => {
     console.error(e);
     const status = Number.isInteger(e?.status) ? e.status : 500;
     const code = e?.code || 'internal_error';
-    const hint = e?.hint || (status >= 500 ? `服务端日志：logs/automation-manager.err（${new Date().toISOString()}）` : undefined);
+    const hint = e?.hint || (status >= 500 ? `服务端日志：var/logs/automation-manager.err（${new Date().toISOString()}）` : undefined);
     return failJson(res, status, e?.message || String(e), { code, ...(hint ? { hint } : {}) });
   }
 });
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Automation Manager http://127.0.0.1:${PORT}`);
-  // AUTOMATION_HOME 只搬数据目录，不搬登记表；两者分别打出来，避免误把生产 registry 当沙箱写。
+  // 数据根与登记表都在 BASE 下，所以 AUTOMATION_HOME 一处就能把两者一起搬进沙箱。
   console.log(`  base=${BASE}`);
-  console.log(`  registry=${REGISTRY}${process.env.AUTOMATION_MANAGER_REGISTRY ? '' : '  (默认跟随 server.mjs 所在目录，不受 AUTOMATION_HOME 影响)'}`);
+  console.log(`  registry=${REGISTRY}${process.env.AUTOMATION_MANAGER_REGISTRY ? '  (AUTOMATION_MANAGER_REGISTRY 覆盖)' : ''}`);
 });
 
 process.on('SIGTERM', () => server.close(() => process.exit(0)));

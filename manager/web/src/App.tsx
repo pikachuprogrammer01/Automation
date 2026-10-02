@@ -54,7 +54,7 @@ export default function Manager() {
     } catch (e) {
       notification.error({
         message: (e as Error).message || '请求失败',
-        description: '管理器仍在运行，可以点「刷新」重试；反复失败请看 logs/automation-manager.err。',
+        description: '管理器仍在运行，可以点「刷新」重试；反复失败请看 var/logs/automation-manager.err。',
         duration: 9,
       });
       return false;

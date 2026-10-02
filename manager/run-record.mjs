@@ -57,6 +57,8 @@ const record = {
 };
 if (detail.note) record.note = detail.note;
 if (Array.isArray(detail.evidence)) record.evidence = detail.evidence;
+// 接管了上一轮遗留的锁：必须留在记录里，否则"曾经停跑"这件事再次变成不可知。
+if (env.AUTOMATION_LOCK_STALE === '1') record.lockStale = true;
 
 let notified = false;
 try {

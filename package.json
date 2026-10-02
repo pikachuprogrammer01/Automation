@@ -5,11 +5,15 @@
   "description": "macOS 本机自动化任务管理器：录制浏览器操作、生成 Playwright 脚本、按天定时执行，并在网页界面看每次运行输出",
   "license": "MIT",
   "engines": {
-    "node": ">=18"
+    "node": ">=20.11"
   },
   "scripts": {
     "start": "node manager/server.mjs",
     "build": "npm --prefix manager/web run build",
-    "dev": "npm --prefix manager/web run dev"
+    "dev": "npm --prefix manager/web run dev",
+    "test": "node --test test/*.test.mjs",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-include=lib/** --test-coverage-include=manager/** test/*.test.mjs",
+    "test:ci": "node --test --experimental-test-coverage --test-coverage-include=lib/** --test-coverage-lines=90 --test-coverage-branches=85 test/*.test.mjs",
+    "test:watch": "node --test --watch test/*.test.mjs"
   }
 }

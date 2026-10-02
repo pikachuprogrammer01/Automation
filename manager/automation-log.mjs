@@ -5,8 +5,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { baseDir, queryRuns, reasonLabel, ALERT_STATUSES } from '../lib/run-result.mjs';
 
-const ROOT = path.resolve(import.meta.dirname, '..');
-const REGISTRY = process.env.AUTOMATION_MANAGER_REGISTRY || path.join(ROOT, 'manager', 'registry.json');
+const REGISTRY = process.env.AUTOMATION_MANAGER_REGISTRY || path.join(baseDir(), 'registry.json');
+const LAUNCHCTL = process.env.AUTOMATION_LAUNCHCTL || '/bin/launchctl';
 
 const USAGE = [
   '用法：manager/automation-log [选项]',
@@ -86,7 +86,7 @@ function registryTasks() {
 }
 function launchdLoaded(task) {
   if (!task.launchLabel) return false;
-  return spawnSync('/bin/launchctl', ['print', 'gui/' + process.getuid() + '/' + task.launchLabel], { timeout: 5000 }).status === 0;
+  return spawnSync(LAUNCHCTL, ['print', 'gui/' + process.getuid() + '/' + task.launchLabel], { timeout: 5000 }).status === 0;
 }
 
 const opt = parseArgs(process.argv.slice(2));

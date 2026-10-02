@@ -62,5 +62,5 @@ done
 printf '管理器没能在 %s 起来（标签 %s）。\n' "$URL" "$LABEL" >&2
 printf '端口占用情况：\n' >&2
 /usr/sbin/lsof -nP "-iTCP:$PORT" -sTCP:LISTEN >&2 || printf '  %s 上没有监听\n' "$PORT" >&2
-printf '服务端日志：%s\n' "$HERE/../logs/automation-manager.err" >&2
+printf '服务端日志：%s（装了 LaunchAgent 则以 plist 里的 StandardErrorPath 为准）\n' "${HERE:h}/var/logs/automation-manager.err" >&2
 exit 1

@@ -18,7 +18,7 @@ manager/install-launchagent             # 写入并加载，随后 curl 健康�
 不想装 LaunchAgent、只想手起服务，也不需要任何依赖：
 
 ```bash
-cp manager/registry.example.json manager/registry.json   # 首次：空登记表
+mkdir -p var && cp manager/registry.example.json var/registry.json   # 首次：空登记表
 cd manager && npm start                                   # 等价于 node server.mjs
 ```
 
@@ -29,11 +29,11 @@ cd manager && npm start                                   # 等价于 node serve
 | 位置 | 作用 |
 | --- | --- |
 | `manager/server.mjs` | Node HTTP 服务：任务读写、launchd 操作、录制/登录/测试进程托管 |
-| `manager/registry.json` | 任务登记表（含 plist 路径、命令、日志路径等非密码信息） |
+| `var/registry.json` | 任务登记表（含 plist 路径、命令、日志路径等非密码信息）。`var/` 是数据根，gitignore 排除 |
 | `manager/web/` | 前端源码：React 18 + TypeScript + Ant Design v5 + Vite |
 | `manager/public/` | 前端**构建产物**，由 `server.mjs` 静态托管，不要手改 |
 | `manager/open-manager` | 启动器：健康就复用，不健康才拉起服务并打开页面 |
-| `manager/backups/` | 本次改造前的原始文件备份 |
+| `var/backups/` | 本次改造前的原始文件备份 |
 
 改完 `manager/web/src/` 必须重新构建，页面才会变（首次要先装前端依赖，否则 `npm run build` 会报 `sh: tsc: command not found`）：
 
@@ -51,14 +51,14 @@ cd <项目目录>/manager/web && npm run dev     # http://127.0.0.1:4760
 
 全部同源、只监听 `127.0.0.1`。除 `GET` 外都校验 `Origin`（不带 Origin 的请求放行，方便 curl 调试）。
 成功 `{ "ok": true, ... }`；失败 `{ "ok": false, "error": "给人看的话", "code": "machine_code", "hint": "怎么修" }`。
-状态码：400 入参 · 403 跨站或路径越界 · 404 找不到 · 409 同任务在跑（`task_busy`）· 413 body 超 64KB · 422 数据不自洽 · 500 服务端异常（原话同时进 `logs/automation-manager.err`）· 503 登记表缺失。
+状态码：400 入参 · 403 跨站或路径越界 · 404 找不到 · 409 同任务在跑（`task_busy`）· 413 body 超 64KB · 422 数据不自洽 · 500 服务端异常（原话同时进 `var/logs/automation-manager.err`）· 503 登记表缺失。
 
 | 方法与路径 | 作用 | 备注 |
 | --- | --- | --- |
 | `GET /api/system` | 健康检查 | 返回 `{manager:"running", port}`；`open-manager` 靠它判断端口上是不是自己 |
 | `GET /api/tasks` | 任务列表 | 每项带 `loaded` `schedule` `plistExists` `profileExists` `lastLog` `active` `lastRun` `credentialBackend` |
 | `GET /api/tasks/:id/log?from=<字节偏移>` | 取增量日志 | 运行面板每 1.5 秒拉一次；共享日志文件靠偏移量互不串台 |
-| `POST /api/recordings/create` | 新建录制/空白任务 | body `{id,name,url,blank?}`；会写脚手架到 `tasks/<id>/` |
+| `POST /api/recordings/create` | 新建录制/空白任务 | body `{id,name,url,blank?}`；会写脚手架到 `var/tasks/<id>/` |
 | `POST /api/tasks/:id/run` | 立即运行 | 返回 `{pid}`；同任务并发返回 409 |
 | `POST /api/tasks/:id/schedule` | 改执行时间 | body `{hour,minute}`，写 plist 并重新 bootstrap |
 | `POST /api/tasks/:id/enable` / `disable` | 启用 / 暂停 | 暂停会 bootout 并 `launchctl disable` |
@@ -96,9 +96,9 @@ cd <项目目录>/manager/web && npm run dev     # http://127.0.0.1:4760
 
 ## 录制任务的依赖前提
 
-任务脚本在 `<项目目录>/tasks/<ID>/`，位于 `manager/` 之外，所以运行器
+任务脚本在 `<项目目录>/var/tasks/<ID>/`，位于 `manager/` 之外，所以运行器
 `manager/run-recorded-task` 会自动建一个软链
-`<项目目录>/tasks/node_modules -> <项目目录>/manager/node_modules`，
+`<项目目录>/var/tasks/node_modules -> <项目目录>/manager/node_modules`，
 让 `playwright.config.mjs` / `recorded.spec.js` 能解析到 `@playwright/test`；
 node 也是显式解析的（管理器传 `NODE_BIN`，否则退回 nvm 最新版 → Homebrew → /usr/local）。
 少任何一环，任务会以退出码 127 或 1 失败，日志里会写明 `node_not_found` /
@@ -144,7 +144,7 @@ node 也是显式解析的（管理器传 `NODE_BIN`，否则退回 nvm 最新�
 
 新建自动化时选择 **新建空白脚本**，然后点 **打开代码**。
 
-每个自己创建的任务位于 `<项目目录>/tasks/<任务 ID>/`：
+每个自己创建的任务位于 `<项目目录>/var/tasks/<任务 ID>/`：
 
 - `recorded.spec.js`：自动化代码
 - `playwright.config.mjs`：Playwright 配置
@@ -153,7 +153,7 @@ node 也是显式解析的（管理器传 `NODE_BIN`，否则退回 nvm 最新�
 
 ## 管理器故障恢复
 
-后台服务名称：`com.pikachu.automation-manager`，日志在 `<项目目录>/logs/automation-manager.{out,err}`。
+后台服务名称：`com.pikachu.automation-manager`，日志在 `<项目目录>/var/logs/automation-manager.{out,err}`。
 
 - 双击 App 没反应：终端执行 `<项目目录>/manager/open-manager`，它会把端口占用情况打印出来。
 - `open-manager` 退出码 2 并提示「没有 LaunchAgent」：这台机器还没装过，跑 `manager/install-launchagent`；只想临时看一眼就 `cd manager && npm start`。
