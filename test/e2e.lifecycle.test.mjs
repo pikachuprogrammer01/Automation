@@ -112,15 +112,17 @@ describe('任务全生命周期（PRD 验收标准 1）', () => {
     );
   });
 
-  test('收尾：真实 launchd 域里不得留下任何 selftest 标签', () => {
+  test('收尾：真实 launchd 域里不得留下任何 selftest 标签', (t) => {
     // 曾经踩过：harness 只做 PATH 垫片时，server.mjs 用绝对路径 /bin/launchctl，PATH 拦不住，
     // 测试真的往真实域注册了定时任务。这条断言就是防它再犯——直接问真 launchctl。
-    const r = spawnSync('/bin/launchctl', ['print', `gui/${process.getuid()}/com.pikachu.automation-selftest.life-demo`],
-      { encoding: 'utf8', timeout: 5000 });
-    assert.notEqual(r.status, 0, '真实域里若还能 print 到这个标签，说明注入点没生效');
-    const listed = spawnSync('/bin/launchctl', ['list'], { encoding: 'utf8', timeout: 5000 }).stdout || '';
-    assert.match(listed, /com\.pikachu\.automation-manager/, '基线断言：真实域应当是可读的');
-    assert.ok(!listed.includes('com.pikachu.automation-selftest'), `launchd list 里残留测试标签：${listed.split('\n').filter((l) => l.includes('selftest')).join(' | ')}`);
+    const listed = spawnSync('/bin/launchctl', ['list'], { encoding: 'utf8', timeout: 5000 });
+    if (listed.status !== 0) { t.skip(`这台机器读不到 launchd 域（${(listed.stderr || '').trim().slice(0, 60)}）`); return; }
+    // 只断言"没有测试残留"。不能断言生产服务在不在——那等于要求跑测试的人已经装好 LaunchAgent，
+    // 在 CI 和别人的机器上必然红。
+    assert.ok(!listed.stdout.includes('com.pikachu.automation-selftest'),
+      `真实域残留了测试标签：${listed.stdout.split('\n').filter((l) => l.includes('selftest')).join(' | ')}`);
+    assert.ok(!listed.stdout.includes('life-demo') && !listed.stdout.includes('boot-fail'),
+      '真实域残留了生命周期用例的标签');
   });
 });
 
