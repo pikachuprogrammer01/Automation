@@ -1,0 +1,70 @@
+#!/bin/zsh
+set -u
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+case "${1:-}" in
+  -h|--help|help)
+    printf '%s\n' '用法：manager/run-recorded-task <任务 ID>' '' \
+      '跑 tasks/<任务 ID>/recorded.spec.js（Playwright，依赖取自 manager/node_modules）。' \
+      '任务 ID 由管理器登记，见 manager/registry.json。' '' \
+      '退出码：2 参数不合法 · 3 缺 playwright CLI · 4 找不到 node · 5 找不到脚本 · 其余为 Playwright 退出码' \
+      '输出：追加写 logs/<任务 ID>.log，本脚本不往 stdout 打东西。'
+    exit 0 ;;
+esac
+ID="${1:-}"
+if [[ ! "$ID" =~ '^[a-z0-9][a-z0-9-]{1,40}$' ]]; then
+  printf '用法：manager/run-recorded-task <任务 ID>\n任务 ID 缺失或不合法：%s（只允许小写字母、数字和连字符，2-41 位）\n' "${ID:-（空）}" >&2
+  exit 2
+fi
+# 仓库根 = manager/ 的上一级；AUTOMATION_HOME 可整体改指向。
+BASE="${AUTOMATION_HOME:-${0:A:h:h}}"
+TASK="$BASE/tasks/$ID"
+LOG="$BASE/logs/$ID.log"
+LOCK="$TASK/.lock"
+mkdir -p "$BASE/logs"
+# 先确认脚本在，再拿锁：否则任务目录缺失会被 mkdir 判成“拿不到锁”，报成 already_running 并 0 退出。
+if [[ ! -f "$TASK/recorded.spec.js" ]]; then
+  printf '%s {"status":"failed","reason":"script_not_found","task":"%s"}\n' "$(date '+%F %T')" "$ID" >> "$LOG"
+  exit 5
+fi
+if ! mkdir "$LOCK" 2>/dev/null; then
+  printf '%s {"status":"skipped","reason":"already_running"}\n' "$(date '+%F %T')" >> "$LOG"
+  exit 0
+fi
+trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+
+# playwright CLI 的 shebang 是 `#!/usr/bin/env node`，而这里的 PATH 故意不含 nvm 目录，
+# 直接执行会 127。所以显式解析一个 node 可执行文件：管理器传入 > nvm 最新版 > 常见安装位置。
+NODE="${NODE_BIN:-}"
+if [[ ! -x "$NODE" ]]; then
+  NODE="$(ls -1d "$HOME"/.nvm/versions/node/*/bin/node(N) 2>/dev/null | sort -V | tail -1)"
+fi
+if [[ ! -x "$NODE" ]]; then
+  for c in /opt/homebrew/bin/node /usr/local/bin/node; do
+    [[ -x "$c" ]] && NODE="$c" && break
+  done
+fi
+if [[ ! -x "$NODE" ]]; then
+  printf '%s {"status":"failed","reason":"node_not_found"}\n' "$(date '+%F %T')" >> "$LOG"
+  exit 4
+fi
+
+RUNNER="$BASE/manager/node_modules/.bin/playwright"
+if [[ ! -x "$RUNNER" ]]; then
+  printf '%s {"status":"failed","reason":"playwright_cli_missing"}\n' "$(date '+%F %T')" >> "$LOG"
+  exit 3
+fi
+
+# 任务目录在 manager/ 之外，Node 从 config/spec 向上找不到 @playwright/test。
+# 用一层 tasks/node_modules 软链把 manager 的依赖接上，只建一次。
+mkdir -p "$BASE/tasks"
+if [[ -L "$BASE/tasks/node_modules" && ! -e "$BASE/tasks/node_modules" ]]; then
+  rm -f "$BASE/tasks/node_modules"   # 目录被搬走后留下的悬空软链，重建前先清掉
+fi
+[[ -e "$BASE/tasks/node_modules" ]] || ln -s "$BASE/manager/node_modules" "$BASE/tasks/node_modules"
+
+cd "$TASK" || exit 2
+printf '%s START node=%s\n' "$(date '+%F %T')" "$("$NODE" -v 2>/dev/null || echo unknown)" >> "$LOG"
+"$NODE" "$RUNNER" test recorded.spec.js --config playwright.config.mjs >> "$LOG" 2>&1
+RC=$?
+printf '%s EXIT=%s\n' "$(date '+%F %T')" "$RC" >> "$LOG"
+exit "$RC"

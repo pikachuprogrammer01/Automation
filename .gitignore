@@ -1,0 +1,22 @@
+# 依赖与构建缓存
+node_modules/
+
+# 个人运行数据：含真实账号、邮箱、浏览器登录态，任何情况下都不入库
+manager/registry.json
+manager/registry.json.bak
+manager/backups/
+manager/keychain-migration-complete
+tasks/*/auth.json
+tasks/node_modules
+browser-data/
+logs/
+recordings/
+
+# 第三方整块（自带 .git，体积 787M）
+skyvern/
+
+# 系统噪声
+.DS_Store
+
+# agent 工具在本目录留下的日志与状态
+.gstack/

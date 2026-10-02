@@ -1,0 +1,15 @@
+{
+  "name": "automation-manager",
+  "version": "1.0.0",
+  "private": true,
+  "description": "macOS 本机自动化任务管理器：录制浏览器操作、生成 Playwright 脚本、按天定时执行，并在网页界面看每次运行输出",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node manager/server.mjs",
+    "build": "npm --prefix manager/web run build",
+    "dev": "npm --prefix manager/web run dev"
+  }
+}

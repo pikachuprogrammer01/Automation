@@ -1,0 +1,152 @@
+#!/bin/zsh
+set -u
+# 生成并加载管理器的 LaunchAgent。仓里不带 plist，这是让「定时自启 + 双击 App」在新机器上成立的唯一入口。
+# 约定：plist 是配置真源，open-manager 也从这里读 Label 和端口。
+
+ROOT="${0:A:h}"
+BASE="${AUTOMATION_HOME:-${ROOT:h}}"
+LABEL="com.pikachu.automation-manager"
+PORT="4765"
+NODE=""
+MODE="install"
+FORCE=0
+
+usage() {
+  printf '%s\n' \
+    '用法：manager/install-launchagent [选项]' '' \
+    '生成 ~/Library/LaunchAgents/<label>.plist 并加载，让管理器开机自启、崩溃自拉起。' '' \
+    '选项：' \
+    '  --port <n>      监听端口，默认 4765（只绑 127.0.0.1）' \
+    '  --home <dir>    数据根目录（tasks/ logs/ browser-data/），默认本仓根目录' \
+    '  --node <path>   node 可执行文件，默认按 NODE_BIN → nvm 最新版 → Homebrew → /usr/local → PATH 依次找' \
+    '  --label <name>  LaunchAgent 标签，默认 com.pikachu.automation-manager；改了 open-manager 会自动跟着读' \
+    '  --dry-run       只打印将要写入的 plist 和将执行的命令，不落盘、不碰 launchd' \
+    '  --print         只把 plist 打到 stdout' \
+    '  --uninstall     bootout 并删除 plist（不动任务脚本、凭据和日志）' \
+    '  --force         已有 plist 且内容不同时也覆盖重载' '' \
+    '退出码：0 成功 · 1 校验或加载失败 · 2 参数不合法 · 3 找不到 node · 4 已有配置不同且未加 --force'
+}
+
+while (( $# )); do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --port) [[ "$2" == <-> ]] || { printf '缺少合法的 --port 值：%s\n' "${2:-（空）}" >&2; exit 2; }; PORT="$2"; shift 2 ;;
+    --home) [[ -n "${2:-}" ]] || { printf '缺少 --home 值\n' >&2; exit 2; }; BASE="$2"; shift 2 ;;
+    --node) [[ -n "${2:-}" ]] || { printf '缺少 --node 值\n' >&2; exit 2; }; NODE="$2"; shift 2 ;;
+    --label) [[ -n "${2:-}" ]] || { printf '缺少 --label 值\n' >&2; exit 2; }; LABEL="$2"; shift 2 ;;
+    --dry-run) MODE="dry-run"; shift ;;
+    --print) MODE="print"; shift ;;
+    --uninstall) MODE="uninstall"; shift ;;
+    --force) FORCE=1; shift ;;
+    *) printf '未知参数：%s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+PLIST_DIR="$HOME/Library/LaunchAgents"
+PLIST="$PLIST_DIR/${LABEL}.plist"
+TARGET="gui/$UID/$LABEL"
+SERVER="$ROOT/server.mjs"
+OUT="$BASE/logs/automation-manager.out"
+ERR="$BASE/logs/automation-manager.err"
+
+plist_text() {
+  printf '%s\n' \
+    '<?xml version="1.0" encoding="UTF-8"?>' \
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+    '<plist version="1.0">' \
+    '<dict>' \
+    '	<key>EnvironmentVariables</key>' \
+    '	<dict>' \
+    "		<key>AUTOMATION_MANAGER_PORT</key><string>${PORT}</string>" \
+    "		<key>AUTOMATION_HOME</key><string>${BASE}</string>" \
+    "		<key>AUTOMATION_MANAGER_LABEL</key><string>${LABEL}</string>" \
+    '		<key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>' \
+    '	</dict>' \
+    "	<key>Label</key><string>${LABEL}</string>" \
+    '	<key>ProcessType</key><string>Background</string>' \
+    '	<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>' \
+    '	<key>RunAtLoad</key><true/>' \
+    '	<key>ProgramArguments</key>' \
+    '	<array>' \
+    "		<string>${NODE}</string>" \
+    "		<string>${SERVER}</string>" \
+    '	</array>' \
+    "	<key>StandardErrorPath</key><string>${ERR}</string>" \
+    "	<key>StandardOutPath</key><string>${OUT}</string>" \
+    '</dict>' \
+    '</plist>'
+}
+
+if [[ "$MODE" == "uninstall" ]]; then
+  if [[ ! -f "$PLIST" ]]; then printf '%s 本来就没有 %s\n' 'OK' "$LABEL"; exit 0; fi
+  /bin/launchctl bootout "$TARGET" >/dev/null 2>&1 || true
+  rm -f "$PLIST" && printf '已卸载 %s（plist 已删；tasks/ logs/ 凭据都没动）\n' "$LABEL"
+  exit 0
+fi
+
+if [[ -n "$NODE" ]]; then
+  # 显式传了 --node 就不兜底：路径写错要当场说，不能悄悄换成别的 node。
+  [[ -x "$NODE" ]] || { printf '指定的 node 不可执行：%s\n' "$NODE" >&2; exit 3; }
+else
+  [[ -x "${NODE_BIN:-}" ]] && NODE="$NODE_BIN"
+  [[ -x "$NODE" ]] || NODE="$(ls -1d "$HOME"/.nvm/versions/node/*/bin/node(N) 2>/dev/null | sort -V | tail -1)"
+  [[ -x "$NODE" ]] || { for c in /opt/homebrew/bin/node /usr/local/bin/node; do [[ -x "$c" ]] && NODE="$c" && break; done; }
+  [[ -x "$NODE" ]] || NODE="$(command -v node || true)"
+fi
+if [[ ! -x "$NODE" ]]; then
+  printf '找不到 node 可执行文件。用 --node <路径> 指定一个。\n' >&2
+  exit 3
+fi
+if [[ ! -f "$SERVER" ]]; then
+  printf '找不到服务端：%s\n这个脚本必须待在仓里的 manager/ 目录下运行。\n' "$SERVER" >&2
+  exit 2
+fi
+
+if [[ "$MODE" == "print" ]]; then plist_text; exit 0; fi
+
+if [[ "$MODE" == "dry-run" ]]; then
+  printf '%s\n' "将写入：$PLIST" "将执行：launchctl bootout $TARGET（忽略未加载）→ enable → bootstrap" "健康检查：curl http://127.0.0.1:$PORT/api/system 期望 manager=running" ''
+  plist_text
+  exit 0
+fi
+
+TMP="$(mktemp)"
+plist_text > "$TMP"
+if ! /usr/bin/plutil -lint "$TMP" >/dev/null; then
+  printf '生成的 plist 通不过 plutil 校验，已放弃写入：%s\n' "$PLIST" >&2
+  rm -f "$TMP"; exit 1
+fi
+if [[ -f "$PLIST" ]]; then
+  if cmp -s "$TMP" "$PLIST"; then
+    printf '%s 已是这份配置，无需改动（端口 %s）\n' "$LABEL" "$PORT"
+    rm -f "$TMP"; exit 0
+  fi
+  if (( ! FORCE )); then
+    printf '%s 已存在且内容不同。确认要覆盖重载就加 --force；差异：\n' "$PLIST" >&2
+    /usr/bin/diff -u "$PLIST" "$TMP" >&2
+    rm -f "$TMP"; exit 4
+  fi
+fi
+
+mkdir -p "$PLIST_DIR" "$BASE/logs" "$BASE/tasks"
+mv "$TMP" "$PLIST"
+chmod 600 "$PLIST"
+/bin/launchctl bootout "$TARGET" >/dev/null 2>&1 || true
+/bin/launchctl enable "$TARGET" >/dev/null 2>&1 || true
+if ! /bin/launchctl bootstrap "gui/$UID" "$PLIST" 2>/tmp/install-launchagent-bootstrap.err; then
+  printf 'plist 已写到 %s，但 launchd 没能加载：\n  %s\n' "$PLIST" "$(cat /tmp/install-launchagent-bootstrap.err 2>/dev/null | head -3)" >&2
+  printf '可以先跑 manager/open-manager 手动拉起，或看 %s\n' "$ERR" >&2
+  exit 1
+fi
+for _ in {1..50}; do
+  if /usr/bin/curl -fsS -m 1 "http://127.0.0.1:$PORT/api/system" 2>/dev/null | /usr/bin/grep -q '"manager":"running"'; then
+    printf '✓ %s 已加载，管理器在 http://127.0.0.1:%s\n' "$LABEL" "$PORT"
+    printf '  node=%s\n  数据目录=%s\n  日志=%s\n' "$NODE" "$BASE" "$OUT"
+    exit 0
+  fi
+  sleep 0.2
+done
+printf '已加载但 5 秒内没在 %s 上等到应答。端口占用情况：\n' "http://127.0.0.1:$PORT" >&2
+/usr/sbin/lsof -nP "-iTCP:$PORT" -sTCP:LISTEN >&2 || printf '  %s 上没有监听\n' "$PORT" >&2
+printf '看这里找原因：%s\n' "$ERR" >&2
+exit 1

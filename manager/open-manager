@@ -1,0 +1,66 @@
+#!/bin/zsh
+set -u
+DEFAULT_LABEL="com.pikachu.automation-manager"
+DEFAULT_PORT=4765
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  printf '%s\n' \
+    '用法：manager/open-manager' '' \
+    '健康就只打开页面；不健康才拉起服务。不会强杀一个正在正常应答的管理器。' \
+    '端口、标签都以 LaunchAgent 的 plist 为准（manager/install-launchagent 生成）。' '' \
+    '退出码：0 已打开页面 · 1 拉不起来（会打印端口占用与日志位置）· 2 没有 LaunchAgent（提示先跑安装器）'
+  exit 0
+fi
+
+LABEL="${AUTOMATION_MANAGER_LABEL:-$DEFAULT_LABEL}"
+PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
+# 改过标签的克隆版：默认位置没有 plist，就找一个真正指向本仓 server.mjs 的。
+if [[ ! -f "$PLIST" ]]; then
+  for cand in "$HOME"/Library/LaunchAgents/*.plist(N); do
+    if /usr/bin/grep -q "manager/server.mjs" "$cand" 2>/dev/null; then
+      LABEL="${cand:t:r}"; PLIST="$cand"; break
+    fi
+  done
+fi
+TARGET="gui/$UID/$LABEL"
+PORT="$(/usr/bin/plutil -extract EnvironmentVariables.AUTOMATION_MANAGER_PORT raw -o - "$PLIST" 2>/dev/null)"
+[[ "$PORT" == <-> ]] || PORT="$DEFAULT_PORT"
+URL="http://127.0.0.1:$PORT"
+
+# 复用健康实例：kickstart -k 会杀掉它，让每个已打开的页签各记一次刷新失败。
+# 必须匹配管理器自己的应答，不能只看 HTTP 200，否则同端口上别的程序会被误认。
+if /usr/bin/curl -fsS -m 1 "$URL/api/system" 2>/dev/null | /usr/bin/grep -q '"manager":"running"'; then
+  /usr/bin/open "$URL"
+  exit 0
+fi
+
+HERE="${0:A:h}"
+if [[ ! -f "$PLIST" ]]; then
+  printf '没有 LaunchAgent，起不了后台服务。\n' >&2
+  printf '  找过：%s\n' "$HOME/Library/LaunchAgents/${DEFAULT_LABEL}.plist" >&2
+  printf '  装一个（只影响你这一台机器）：%s\n' "$HERE/install-launchagent" >&2
+  printf '  只想临时跑一下、不开机自启：cd %s && npm start\n' "$HERE" >&2
+  exit 2
+fi
+
+if ! /bin/launchctl print "$TARGET" >/dev/null 2>&1; then
+  if ! /bin/launchctl bootstrap "gui/$UID" "$PLIST" 2>/tmp/open-manager-bootstrap.err; then
+    printf 'launchd 没能加载 %s：\n  %s\n' "$LABEL" "$(head -3 /tmp/open-manager-bootstrap.err)" >&2
+    printf '  重新安装试试：%s --force\n' "$HERE/install-launchagent" >&2
+    exit 1
+  fi
+else
+  /bin/launchctl kickstart -k "$TARGET" >/dev/null 2>&1 || true
+fi
+for _ in {1..50}; do
+  if /usr/bin/curl -fsS -m 1 "$URL/api/system" 2>/dev/null | /usr/bin/grep -q '"manager":"running"'; then
+    /usr/bin/open "$URL"
+    exit 0
+  fi
+  sleep 0.1
+done
+printf '管理器没能在 %s 起来（标签 %s）。\n' "$URL" "$LABEL" >&2
+printf '端口占用情况：\n' >&2
+/usr/sbin/lsof -nP "-iTCP:$PORT" -sTCP:LISTEN >&2 || printf '  %s 上没有监听\n' "$PORT" >&2
+printf '服务端日志：%s\n' "$HERE/../logs/automation-manager.err" >&2
+exit 1

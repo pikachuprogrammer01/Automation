@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>演示站点 · 自动化管理器</title>
+<style>
+  body { margin:0; min-height:100vh; background:#0c0f14; color:#eef2f7; font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif; }
+  .wrap { max-width:720px; margin:0 auto; padding:48px 24px; }
+  h1 { font-size:26px; margin:0 0 6px; }
+  .sub { color:#97a2b2; margin:0 0 28px; font-size:14px; }
+  .card { background:#141922; border:1px solid #2a3443; border-radius:14px; padding:20px; margin-bottom:16px; }
+  .row { display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; }
+  button { font:inherit; font-weight:700; border-radius:10px; padding:10px 16px; border:1px solid transparent; cursor:pointer; }
+  .go { background:#7ca7ff; color:#0c1422; }
+  .ghost { background:transparent; border-color:#2a3443; color:#eef2f7; }
+  .done { color:#64d896; font-weight:700; }
+  .muted { color:#97a2b2; font-size:13px; }
+  code { background:#0b0e13; border:1px solid #202834; border-radius:6px; padding:1px 6px; font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>内置演示站点</h1>
+  <p class="sub">这是一个纯本地的假站点，用来演示「录制 → 测试 → 定时 → 每日签到 / 抽奖」全流程。
+    它不联网、不含任何真实第三方站点，状态存在你自己浏览器的 localStorage 里。</p>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <div class="muted">每日签到</div>
+        <div id="signArea" style="margin-top:6px"></div>
+      </div>
+      <div id="signState" class="muted"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <div class="muted">每日抽奖</div>
+        <div id="lotteryArea" style="margin-top:6px"></div>
+      </div>
+      <div id="lotteryState" class="muted"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div class="muted">今天（北京时区）：<code id="today"></code></div>
+      <button class="ghost" id="resetBtn">重置为未签到 / 未抽奖</button>
+    </div>
+    <p class="muted" style="margin:14px 0 0">
+      页面上的 <code>立即签到</code> <code>今日已签到</code> <code>立即抽奖</code> <code>暂无抽奖机会</code>
+      这些文案，和示例 runner 里判定用的标记词完全一致，方便你把录制流程和状态判定逻辑一起演示清楚。
+    </p>
+  </div>
+</div>
+
+<script>
+  var KEY = 'automation-demo-state';
+  function beijingToday() {
+    var parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(new Date());
+    var v = {};
+    parts.forEach(function (p) { v[p.type] = p.value; });
+    return v.year + '/' + Number(v.month) + '/' + Number(v.day);
+  }
+  function load() {
+    try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+  }
+  function save(s) { localStorage.setItem(KEY, JSON.stringify(s)); }
+  function render() {
+    var today = beijingToday();
+    var s = load();
+    document.getElementById('today').textContent = today;
+    var signed = s.signedOn === today;
+    var claimed = s.claimedOn === today;
+    document.getElementById('signArea').innerHTML = signed
+      ? '<span class="done">今日已签到</span>'
+      : '<button class="go" id="signBtn">立即签到</button>';
+    document.getElementById('signState').textContent = signed ? '签到日期 ' + s.signedOn : '今天还没有签到';
+    document.getElementById('lotteryArea').innerHTML = claimed
+      ? '<span class="done">' + today + ' 已参与</span>'
+      : '<button class="go" id="lotteryBtn">立即抽奖</button>';
+    document.getElementById('lotteryState').textContent = claimed
+      ? '抽奖日期 ' + s.claimedOn
+      : '今天还有 1 次机会';
+    var sb = document.getElementById('signBtn');
+    if (sb) sb.onclick = function () { s.signedOn = today; save(s); render(); };
+    var lb = document.getElementById('lotteryBtn');
+    if (lb) lb.onclick = function () { s.claimedOn = today; save(s); render(); };
+  }
+  document.getElementById('resetBtn').onclick = function () { localStorage.removeItem(KEY); render(); };
+  render();
+</script>
+</body>
+</html>
