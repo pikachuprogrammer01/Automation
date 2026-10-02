@@ -12,6 +12,8 @@
     "build": "npm --prefix manager/web run build",
     "dev": "npm --prefix manager/web run dev",
     "test": "node --test test/*.test.mjs",
+    "check": "npm run test:ci && npm run check:artifact",
+    "check:artifact": "node -e \"const fs=require('fs');if(!fs.existsSync('manager/web/node_modules')){console.log('SKIP：没装 manager/web 依赖，跳过构建产物一致性');process.exit(0)}\" && npm run build && git diff --quiet --exit-code manager/public && echo '构建产物与源码同步'",
     "test:coverage": "node --test --experimental-test-coverage --test-reporter=spec --test-coverage-include=lib/*.mjs --test-coverage-include=manager/*.mjs test/*.test.mjs",
     "test:ci": "node --test --experimental-test-coverage --test-coverage-include=lib/*.mjs --test-coverage-include=manager/task-format.mjs --test-coverage-lines=90 --test-coverage-branches=85 test/*.test.mjs",
     "test:watch": "node --test --watch test/*.test.mjs"

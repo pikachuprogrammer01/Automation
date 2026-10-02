@@ -169,9 +169,10 @@ manager/install-launchagent             # 生成并加载 ~/Library/LaunchAgents
 ## 测试
 
 ```bash
+npm run check         # 交付前跑这一个：门禁 + 构建产物一致性
 npm test              # 全部用例，不装任何依赖
 npm run test:coverage # 带每文件覆盖率报告
-npm run test:ci       # 同上 + 覆盖率门禁（行 ≥90 / 分支 ≥85），CI 跑这个
+npm run test:ci       # 门禁：纯逻辑层行 ≥90 / 分支 ≥85，不达标 exit 1
 ```
 
 `node:test` 自带，所以 `npm test` 在空 `node_modules` 上也能跑。四分层：
@@ -184,6 +185,8 @@ npm run test:ci       # 同上 + 覆盖率门禁（行 ≥90 / 分支 ≥85）�
 | 故障注入 | `test/fault.*.test.mjs` | 被强杀后的锁接管、连接被拒、500、挂站超时、DNS 失败、只读目录 | 网络层需要 |
 
 副作用全走注入点（`AUTOMATION_LAUNCHCTL` / `AUTOMATION_PLUTIL` / `AUTOMATION_OSASCRIPT`），加上假 `HOME` 与独立 launchd 标签前缀，**测试不会碰到真实 launchd 域、真实凭据或生产登记表**。另有 `test/docs.drift.test.mjs` 机械校验文档与实现是否还一致。
+
+两点口径：覆盖率门禁只统计纯逻辑层（`lib/*.mjs` 与 `manager/task-format.mjs`），不把 `server.mjs` 和压缩后的前端 bundle 算进分母——副作用层由契约层与生命周期层从外部压行为；`check:artifact` 在没装 `manager/web` 依赖时自动跳过并说明原因。
 
 ## 已知限制（截至本版）
 
