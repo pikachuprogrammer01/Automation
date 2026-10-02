@@ -28,7 +28,12 @@ jobs:
 
       # 故意不跑 npm install：测试必须零依赖可执行。
       # 这一步同时也是 PRD 产品原则 5「默认值要能直接活」的回归验证。
-      - name: 测试 + 覆盖率门禁（行 ≥90 / 分支 ≥85）
+      - name: 测试（每个 Node 版本都要能跑）
+        run: node --test test/*.test.mjs
+
+      # Node 20.11 不认 --test-coverage-include（会以 exit 9 退出），门禁只在 24 上卡
+      - name: 覆盖率门禁（行 ≥90 / 分支 ≥85）
+        if: matrix.node == '24'
         run: |
           set +e
           npm run test:ci > /tmp/t.log 2>&1
@@ -42,6 +47,12 @@ jobs:
             grep -E 'AssertionError|TypeError|Error: ' /tmp/t.log | head -6 | sed 's/^/::error::/'
             exit "$code"
           fi
+
+      # runner 恒为 UTC，作者机是 +08：曾有两条用例写死日历日，只在 UTC 下绿。
+      # 多一个时区只要几秒，别再等下一次红灯才发现。
+      - name: 跨时区复跑（Asia/Shanghai）
+        if: matrix.node == '24'
+        run: TZ=Asia/Shanghai node --test test/*.test.mjs
 
       - name: 发布仓洁净度 —— 追踪清单里不得出现私有层路径
         run: |

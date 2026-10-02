@@ -17,7 +17,10 @@ function tmpBase(t) {
   return base;
 }
 function rec(over = {}) {
-  const when = new Date(2026, 9, 3, 8, 20, 5);
+  // 默认用"现在"而不是某个固定日历日：提醒去重、days 窗口这些语义是按当天算的，
+  // 写死日期会在时区不同的机器上（CI runner 是 UTC，本机是 +08）跨天，测试就假红。
+  // 固定时刻只在上面「时间键」那组用，那组是按同一时刻自洽校验的。
+  const when = new Date();
   return {
     runId: 'loveapi-a-20261003-082005', ts: isoLocal(when), task: 'loveapi-a', site: 'LoveAPI',
     trigger: 'launchd', startedAt: isoLocal(when), endedAt: isoLocal(when), durationS: 12,
@@ -145,8 +148,8 @@ describe('记录写入与查询', () => {
   test('中断/权限：记录文件读不了就跳过它，其余文件照常', (t) => {
     const b = tmpBase(t);
     appendRun(b, rec({ runId: 'good' }));
-    const other = path.join(runsDir(b), '2026-10-02.jsonl');
-    fs.writeFileSync(other, `${JSON.stringify(rec({ runId: 'bad-perm', ts: '2026-10-02T08:00:00+08:00' }))}\n`);
+    const other = path.join(runsDir(b), `${dateKeyOf(new Date(Date.now() - 86400000))}.jsonl`);
+    fs.writeFileSync(other, `${JSON.stringify(rec({ runId: 'bad-perm', ts: isoLocal(new Date(Date.now() - 86400000)) }))}\n`);
     fs.chmodSync(other, 0o000);
     try {
       const rows = queryRuns(b, { days: 30 });
@@ -161,8 +164,11 @@ describe('记录写入与查询', () => {
   test('中断：最新那个文件读不了，lastRunFor 要退到上一个而不是返回 null', (t) => {
     const b = tmpBase(t);
     fs.mkdirSync(runsDir(b), { recursive: true });
-    const older = path.join(runsDir(b), '2026-10-02.jsonl');
-    fs.writeFileSync(older, `${JSON.stringify(rec({ runId: 'prev', ts: '2026-10-02T08:00:00+08:00' }))}\n`);
+    // 用"昨天"而不是写死日期：CI runner 是 UTC，写死的 2026-10-02 会和 dateKeyOf(now) 同名，
+    // 第二次写直接覆盖第一次，测试就变成"只有一个读不了的文件"。
+    const yesterday = dateKeyOf(new Date(Date.now() - 86400000));
+    const older = path.join(runsDir(b), `${yesterday}.jsonl`);
+    fs.writeFileSync(older, `${JSON.stringify(rec({ runId: 'prev', ts: isoLocal(new Date(Date.now() - 86400000)) }))}\n`);
     const newest = path.join(runsDir(b), `${dateKeyOf(new Date())}.jsonl`);
     fs.writeFileSync(newest, `${JSON.stringify(rec({ runId: 'unreachable' }))}\n`);
     fs.chmodSync(newest, 0o000);
