@@ -1,19 +1,52 @@
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 const REPO = path.resolve(import.meta.dirname, '..', '..');
 
+const usedPorts = new Set();
+
+/** 必须等内核分完端口、再等 close 的回调把句柄放掉；同步读 address() 只会拿到 null。 */
+function probePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address();
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
+/**
+ * 向内核要一个当下空闲的端口。
+ * 不要按 process.pid 推导：同一进程里每个 sandbox 都会拿到同一个端口，而 node --test
+ * 默认按 CPU 数并行跑各个测试文件，取值空间只有几十个数——撞车时本文件的请求会打到
+ * 另一个文件的管理器上，任务被建进别人的数据根，本文件报 ENOENT；更坏的情况是双方
+ * 恰好错开，测试看着绿其实验的是别人的实例。
+ */
+export async function freePort() {
+  for (let i = 0; i < 20; i += 1) {
+    const p = await probePort();
+    if (!usedPorts.has(p)) { usedPorts.add(p); return p; }
+  }
+  throw new Error('拿不到未被本进程用过的空闲端口');
+}
+
 /**
  * 建一个完全隔离的测试环境：独立数据根、独立 HOME、独立端口。
  * 生产 var/ 与真实 launchd 域永远不被触碰（docs/PRD.md 验收标准 7、8）。
+ * 端口是惰性的——分配要等异步事件，所以 `s.port` / `s.url` 在 ready() 之后才有值。
  */
-export function sandbox(t, { port = 4900 + (process.pid % 90) } = {}) {
+export function sandbox(t, opts = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-test-'));
   const home = path.join(root, 'home');
   const base = path.join(root, 'var');
   const shim = path.join(root, 'shim');
+  const s = { root, home, base, shim, port: null };
+  Object.defineProperty(s, 'url', { get: () => `http://127.0.0.1:${s.port}`, enumerable: true });
   fs.mkdirSync(path.join(home, 'Library', 'LaunchAgents'), { recursive: true });
   fs.mkdirSync(base, { recursive: true });
   fs.mkdirSync(shim, { recursive: true });
@@ -33,8 +66,7 @@ export function sandbox(t, { port = 4900 + (process.pid % 90) } = {}) {
   const env = {
     ...process.env,
     AUTOMATION_HOME: base,
-    AUTOMATION_MANAGER_PORT: String(port),
-    // 测试专用标签前缀：既验证该变量真生效，又保证测试标签永不与生产 com.pikachu.automation.* 撞名
+    // 端口在 launch() 里随 s.port 一起给，不在这里定死（分配是异步的）
     AUTOMATION_LAUNCH_LABEL_PREFIX: 'com.pikachu.automation-selftest',
     AUTOMATION_LAUNCHCTL: path.join(shim, 'launchctl'),
     AUTOMATION_OSASCRIPT: path.join(shim, 'osascript'),
@@ -45,7 +77,8 @@ export function sandbox(t, { port = 4900 + (process.pid % 90) } = {}) {
 
   t.after(() => { fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 }); });
 
-  return { root, home, base, shim, port, env, url: `http://127.0.0.1:${port}` };
+  s.env = env;
+  return s;
 }
 
 /**
@@ -112,30 +145,56 @@ export function plantShims(s, { launchctlFail = false, printLoaded = null } = {}
   };
 }
 
-/** 起一个隔离的管理器实例，等它健康。 */
+/** 起一个隔离的管理器实例。端口在 ready() 里惰性分配，所以别在 ready() 前发请求。 */
 export function startServer(t, s, extraEnv = {}) {
-  const proc = spawn(process.execPath, [path.join(REPO, 'manager', 'server.mjs')], {
-    env: { ...s.env, ...extraEnv },
-    stdio: ['ignore', 'pipe', 'pipe'],
-    cwd: REPO,
-  });
-  t.after(() => { try { proc.kill('SIGKILL'); } catch { /* 已退出 */ } });
-
+  let proc = null;
   let stdout = '';
-  proc.stdout.on('data', (d) => { stdout += d; });
-  proc.stderr.on('data', (d) => { stdout += d; });
+  let up = false;
+
+  const launch = () => {
+    stdout = '';
+    proc = spawn(process.execPath, [path.join(REPO, 'manager', 'server.mjs')], {
+      env: { ...s.env, ...extraEnv, AUTOMATION_MANAGER_PORT: String(s.port) },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: REPO,
+    });
+    proc.stdout.on('data', (d) => { stdout += d; });
+    proc.stderr.on('data', (d) => { stdout += d; });
+  };
+  t.after(() => { if (proc) { try { proc.kill('SIGKILL'); } catch { /* 已退出 */ } } });
+
+  const waitUp = async (timeoutMs) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        const r = await fetch(`${s.url}/api/system`);
+        if (r.ok) {
+          const body = await r.json().catch(() => ({}));
+          if (body.port !== s.port) throw new Error(`端口 ${s.url} 上应答的是别人的实例（它自报 ${body.port}）`);
+          return true;
+        }
+      } catch (e) {
+        if (e instanceof RangeError || /应答的是别人/.test(String(e))) throw e;
+      }
+      await new Promise((res) => setTimeout(res, 100));
+    }
+    return false;
+  };
 
   return {
-    proc,
+    get proc() { return proc; },
     get log() { return stdout; },
     async ready(timeoutMs = 8000) {
-      const deadline = Date.now() + timeoutMs;
-      while (Date.now() < deadline) {
-        try {
-          const r = await fetch(`${s.url}/api/system`);
-          if (r.ok) return true;
-        } catch { /* 还没起来 */ }
-        await new Promise((r) => setTimeout(r, 100));
+      if (up) return true;
+      for (let i = 0; i < 4; i += 1) {
+        if (s.port == null) s.port = await freePort();
+        launch();
+        if (await waitUp(timeoutMs)) { up = true; return true; }
+        // 分配到真正 bind 之间有窗口，可能被别的并行文件抢占：换端口重来。
+        // 绝不能带着"连到了别人的实例"继续跑——那会产出看起来正常的假绿。
+        if (!/EADDRINUSE/.test(stdout)) break;
+        if (proc) { try { proc.kill('SIGKILL'); } catch { /* 已退出 */ } }
+        s.port = await freePort();
       }
       throw new Error(`管理器没起来。stdout:\n${stdout}`);
     },

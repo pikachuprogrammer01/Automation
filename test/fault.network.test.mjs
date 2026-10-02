@@ -2,28 +2,28 @@ import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
-import { sandbox, startServer, writeRegistry } from './helpers/harness.mjs';
+import { sandbox, startServer, writeRegistry, freePort } from './helpers/harness.mjs';
 
 const REPO = path.resolve(import.meta.dirname, '..');
 const HAS_PW = fs.existsSync(path.join(REPO, 'manager/node_modules/@playwright/test'));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** 找一个空闲端口然后关掉它，得到"必然连接被拒"的目标。 */
-function closedPort() {
-  const srv = net.createServer();
-  srv.listen(0);
-  const port = srv.address().port;
-  srv.close();
-  return port;
+/**
+ * 拿到一个确实空闲、且已把句柄释放干净的端口 —— 之后导航到它必然 ECONNREFUSED。
+ * 注意：不能用"listen(0) 后同步读 address()"，那会拿到 undefined，
+ * 于是导航的是 http://127.0.0.1:undefined/ ——用例照样"失败"，但失败的原因完全不是连接被拒。
+ */
+async function closedPort() {
+  return freePort();
 }
 
-function origin(t, handler) {
+/** 起一个本地假源。必须等 listen 完成再读端口——同步读会是 undefined。 */
+async function origin(t, handler) {
   const srv = http.createServer(handler);
-  srv.listen(0);
+  await new Promise((resolve) => srv.listen(0, '127.0.0.1', resolve));
   t.after(() => srv.close());
   return `http://127.0.0.1:${srv.address().port}`;
 }
@@ -70,7 +70,7 @@ describe('网络异常注入（录制任务执行器）', { skip: HAS_PW ? false
     writeRegistry(s, []);
     const api = startServer(t, s);
     await api.ready();
-    const dead = `http://127.0.0.1:${closedPort()}/`;
+    const dead = `http://127.0.0.1:${await closedPort()}/`;
     const dir = await makeFaultTask(api, s, 'net-refused', dead,
       `import { test } from '@playwright/test';\ntest('r', async ({ page }) => { await page.goto(${JSON.stringify(dead)}); });\n`);
 
@@ -91,7 +91,7 @@ describe('网络异常注入（录制任务执行器）', { skip: HAS_PW ? false
     writeRegistry(s, []);
     const api = startServer(t, s);
     await api.ready();
-    const url = origin(t, (_req, res) => { res.writeHead(500, { 'content-type': 'text/plain' }); res.end('boom'); });
+    const url = await origin(t, (_req, res) => { res.writeHead(500, { 'content-type': 'text/plain' }); res.end('boom'); });
     await makeFaultTask(api, s, 'net-500', url,
       `import { test, expect } from '@playwright/test';\ntest('r', async ({ page }) => { await page.goto(${JSON.stringify(url)}); await expect(page.locator('body')).toContainText('正常页面'); });\n`);
 
@@ -108,7 +108,7 @@ describe('网络异常注入（录制任务执行器）', { skip: HAS_PW ? false
     writeRegistry(s, []);
     const api = startServer(t, s);
     await api.ready();
-    const url = origin(t, (_req, _res) => { /* 永远不响应 */ });
+    const url = await origin(t, (_req, _res) => { /* 永远不响应 */ });
     await makeFaultTask(api, s, 'net-hang', url,
       `import { test } from '@playwright/test';\ntest('r', async ({ page }) => { await page.goto(${JSON.stringify(url)}, { waitUntil: 'load' }); });\n`);
 
@@ -146,7 +146,7 @@ describe('网络异常注入（录制任务执行器）', { skip: HAS_PW ? false
     writeRegistry(s, []);
     const api = startServer(t, s);
     await api.ready();
-    const dead = `http://127.0.0.1:${closedPort()}/`;
+    const dead = `http://127.0.0.1:${await closedPort()}/`;
     await makeFaultTask(api, s, 'net-retry', dead,
       `import { test } from '@playwright/test';\ntest('r', async ({ page }) => { await page.goto(${JSON.stringify(dead)}); });\n`);
 
